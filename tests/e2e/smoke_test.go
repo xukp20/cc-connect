@@ -122,7 +122,7 @@ func listRegisteredAgents() []string {
 	// We'll test via the factory pattern
 	agents := []string{
 		"claudecode", "codex", "cursor", "gemini",
-		"iflow", "opencode", "pi", "qoder",
+		"iflow", "kiro", "opencode", "pi", "qoder",
 	}
 	return agents
 }
@@ -559,4 +559,3 @@ func TestSmoke_WebhookCallback(t *testing.T) {
 
 	t.Log("Webhook callback: PASS")
 }
-

@@ -92,6 +92,8 @@ func main() {
 	}
 
 	configFlag := flag.String("config", "", "path to config file (default: ./config.toml or ~/.cc-connect/config.toml)")
+	observeFlag := flag.Bool("observe", false, "observe native terminal sessions and forward them to an observer-capable platform")
+	observeChannelFlag := flag.String("observe-channel", "", "override the observation target channel ID for all projects")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = printUsage
 	flag.Parse()
@@ -204,6 +206,22 @@ func main() {
 		engine.SetAttachmentSendEnabled(cfg.AttachmentSend != "off")
 		engine.SetBaseWorkDir(workDir)
 		engine.SetProjectStateStore(projectState)
+		observeEnabled := false
+		if proj.Observe.Enabled != nil {
+			observeEnabled = *proj.Observe.Enabled
+		}
+		if *observeFlag {
+			observeEnabled = true
+		}
+		observeChannel := strings.TrimSpace(proj.Observe.Channel)
+		if strings.TrimSpace(*observeChannelFlag) != "" {
+			observeChannel = strings.TrimSpace(*observeChannelFlag)
+			observeEnabled = true
+		}
+		engine.SetObserveConfig(core.ObserveCfg{
+			Enabled: observeEnabled,
+			Channel: observeChannel,
+		})
 
 		// Wire multi-workspace mode
 		if proj.Mode == "multi-workspace" {

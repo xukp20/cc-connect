@@ -1,11 +1,13 @@
 package slack
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
 
@@ -117,6 +119,34 @@ func TestParseSlackInnerEventFiles(t *testing.T) {
 	}
 	if files[0].Name != "a.pdf" || files[0].Mimetype != "application/pdf" {
 		t.Fatalf("unexpected file: %+v", files[0])
+	}
+}
+
+func TestSendObservation(t *testing.T) {
+	var gotChannel, gotText string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat.postMessage" {
+			t.Fatalf("path = %s, want /chat.postMessage", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm: %v", err)
+		}
+		gotChannel = r.Form.Get("channel")
+		gotText = r.Form.Get("text")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"channel":"C123","ts":"123.456"}`))
+	}))
+	defer ts.Close()
+
+	p := &Platform{
+		botToken: "xoxb-test-token",
+		client:   slack.New("xoxb-test-token", slack.OptionAPIURL(ts.URL+"/")),
+	}
+	if err := p.SendObservation(context.Background(), "C123", "Claude: hello"); err != nil {
+		t.Fatalf("SendObservation: %v", err)
+	}
+	if gotChannel != "C123" || gotText != "Claude: hello" {
+		t.Fatalf("channel/text = %q/%q, want %q/%q", gotChannel, gotText, "C123", "Claude: hello")
 	}
 }
 

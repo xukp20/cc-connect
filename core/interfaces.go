@@ -14,6 +14,13 @@ type Platform interface {
 	Stop() error
 }
 
+// ObserverTarget is an optional interface for platforms that can receive
+// mirrored native terminal session observations and forward them to a target
+// channel or conversation.
+type ObserverTarget interface {
+	SendObservation(ctx context.Context, channelID, text string) error
+}
+
 // ErrNotSupported indicates a platform doesn't support a particular operation.
 var ErrNotSupported = errors.New("operation not supported by this platform")
 
@@ -39,6 +46,15 @@ type CronReplyTargetResolver interface {
 // per-session environment variables (e.g. CC_PROJECT, CC_SESSION_KEY).
 type SessionEnvInjector interface {
 	SetSessionEnv(env []string)
+}
+
+// SessionObservationSource is an optional interface for agents that can expose
+// a native session transcript directory for observation. The returned directory
+// should contain JSONL files whose appended user/assistant messages can be
+// mirrored to observer-capable platforms.
+type SessionObservationSource interface {
+	SessionObservationDir() (string, error)
+	SessionObservationAssistantName() string
 }
 
 // FormattingInstructionProvider is an optional interface for platforms that

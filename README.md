@@ -117,6 +117,9 @@ High-level view of what each **built-in platform** can do in cc-connect. Inspire
 ### ⏰ Intelligent Scheduling
 **Scheduled Tasks** — Set up cron jobs in natural language. *"Every day at 6am, summarize GitHub trending"* just works.
 
+### 👀 Shared Visibility
+**Native Session Observe** — Mirror supported native terminal sessions into Slack so teammates can follow along without screen sharing.
+
 ### 🎤 Multimodal Support
 **Voice & Images** — Send voice messages or screenshots; cc-connect handles STT/TTS and multimodal forwarding.
 

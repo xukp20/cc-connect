@@ -129,6 +129,12 @@ type RateLimitCfg struct {
 	Window      time.Duration // sliding window size
 }
 
+// ObserveCfg controls mirroring of native terminal session updates.
+type ObserveCfg struct {
+	Enabled bool
+	Channel string
+}
+
 // Engine routes messages between platforms and the agent for a single project.
 type Engine struct {
 	name                  string
@@ -187,6 +193,7 @@ type Engine struct {
 	dirHistory       *DirHistory
 	baseWorkDir      string
 	projectState     *ProjectStateStore
+	observe          ObserveCfg
 
 	// Auto-compress settings
 	autoCompressEnabled   bool
@@ -520,6 +527,11 @@ func (e *Engine) SetCommandSaveDelFunc(fn func(name string) error) {
 
 func (e *Engine) SetDisplaySaveFunc(fn func(thinkingMaxLen, toolMaxLen *int) error) {
 	e.displaySaveFunc = fn
+}
+
+// SetObserveConfig configures mirroring of native terminal sessions.
+func (e *Engine) SetObserveConfig(cfg ObserveCfg) {
+	e.observe = cfg
 }
 
 // ConfigReloadResult describes what was updated by a config reload.
@@ -1029,6 +1041,8 @@ func (e *Engine) Start() error {
 	} else {
 		slog.Info("engine started", "project", e.name, "agent", e.agent.Name(), "platforms", len(e.platforms))
 	}
+
+	e.startObserver()
 
 	// Only return error if ALL platforms failed
 	if len(startErrs) == len(e.platforms) && len(e.platforms) > 0 {
@@ -2130,8 +2144,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		case <-idleCh:
 			slog.Error("agent session idle timeout: no events for too long, killing session",
 				"session_key", sessionKey, "timeout", e.eventIdleTimeout, "elapsed", time.Since(turnStart))
-				cp.Finalize(ProgressCardStateFailed)
-				sp.discard()
+			cp.Finalize(ProgressCardStateFailed)
+			sp.discard()
 			state.mu.Lock()
 			p := state.platform
 			state.mu.Unlock()
@@ -2585,8 +2599,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			return
 
 		case EventError:
-				cp.Finalize(ProgressCardStateFailed)
-				sp.discard()
+			cp.Finalize(ProgressCardStateFailed)
+			sp.discard()
 			if event.Error != nil {
 				slog.Error("agent error", "error", event.Error)
 				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), event.Error))

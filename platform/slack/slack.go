@@ -386,6 +386,19 @@ func (p *Platform) Send(ctx context.Context, rctx any, content string) error {
 	return nil
 }
 
+// SendObservation posts an observed native terminal session message directly to
+// a configured Slack channel.
+func (p *Platform) SendObservation(ctx context.Context, channelID, text string) error {
+	if strings.TrimSpace(channelID) == "" {
+		return fmt.Errorf("slack: observation channel is required")
+	}
+	_, _, err := p.client.PostMessageContext(ctx, channelID, slack.MsgOptionText(text, false))
+	if err != nil {
+		return fmt.Errorf("slack: send observation: %w", err)
+	}
+	return nil
+}
+
 // SendImage uploads and sends an image to the channel.
 // Implements core.ImageSender.
 func (p *Platform) SendImage(ctx context.Context, rctx any, img core.ImageAttachment) error {
@@ -413,6 +426,7 @@ func (p *Platform) SendImage(ctx context.Context, rctx any, img core.ImageAttach
 }
 
 var _ core.ImageSender = (*Platform)(nil)
+var _ core.ObserverTarget = (*Platform)(nil)
 
 func (p *Platform) downloadSlackFile(url string) ([]byte, error) {
 	if url == "" {

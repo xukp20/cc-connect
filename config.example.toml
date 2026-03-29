@@ -125,6 +125,18 @@ level = "info" # debug, info, warn, error
 # min_gap_mins = 30      # minimum minutes between auto-compress runs (default 30)
 
 # =============================================================================
+# Native Session Observe / 本地终端会话观察
+# =============================================================================
+# Mirror native terminal sessions (for agents that support observation) into a
+# platform channel. Currently Slack implements the receiving side.
+# 将本地终端会话（适用于支持观察的 agent）镜像到平台频道中。
+# 当前只有 Slack 实现了接收端。
+#
+# [projects.observe]
+# enabled = true
+# channel = "C0AL13PN4BG"   # Target channel/conversation ID / 目标频道或会话 ID
+
+# =============================================================================
 # Cron Settings / 定时任务设置
 # =============================================================================
 # Controls cron job behavior.
@@ -743,6 +755,12 @@ app_secret = "your-feishu-app-secret"
 # app_token = "xapp-your-app-level-token"
 # allow_from = "*"  # Allowed Slack user IDs / 允许的 Slack 用户 ID
 # share_session_in_channel = false  # If true, all users in a channel share one agent session / 频道共享会话
+#
+# # Optional: mirror native terminal Claude sessions into this Slack channel.
+# # 可选：把本地终端 Claude 会话镜像到这个 Slack 频道。
+# # [projects.observe]
+# # enabled = true
+# # channel = "C0AL13PN4BG"
 
 # Discord (uncomment to enable / 取消注释以启用)
 # 1. Create an app at https://discord.com/developers/applications / 创建应用

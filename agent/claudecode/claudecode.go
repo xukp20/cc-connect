@@ -122,6 +122,27 @@ func (a *Agent) Name() string           { return "claudecode" }
 func (a *Agent) CLIBinaryName() string  { return "claude" }
 func (a *Agent) CLIDisplayName() string { return "Claude" }
 
+func (a *Agent) SessionObservationAssistantName() string { return "Claude" }
+
+func (a *Agent) SessionObservationDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("claudecode: cannot determine home dir: %w", err)
+	}
+	absWorkDir, err := filepath.Abs(a.GetWorkDir())
+	if err != nil {
+		return "", fmt.Errorf("claudecode: resolve work_dir: %w", err)
+	}
+	if dir := findProjectDir(homeDir, absWorkDir); dir != "" {
+		return dir, nil
+	}
+	candidates := projectDirCandidates(absWorkDir)
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("claudecode: no project dir candidate for %s", absWorkDir)
+	}
+	return filepath.Join(homeDir, ".claude", "projects", candidates[0]), nil
+}
+
 func (a *Agent) SetWorkDir(dir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -805,19 +826,7 @@ func boolVal(m map[string]any, key string) bool {
 func findProjectDir(homeDir, absWorkDir string) string {
 	projectsBase := filepath.Join(homeDir, ".claude", "projects")
 
-	// Build candidate keys: different ways Claude Code might encode the path.
-	// Claude Code replaces path separators, colons, and underscores with "-".
-	candidates := []string{
-		// Unix-style: replace OS separator with "-"
-		strings.ReplaceAll(absWorkDir, string(filepath.Separator), "-"),
-		// Windows: replace both "\" and ":" with "-"
-		strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(absWorkDir),
-		// Claude Code also replaces underscores with "-"
-		strings.NewReplacer("/", "-", "\\", "-", ":", "-", "_", "-").Replace(absWorkDir),
-	}
-	// Also try with forward slashes (config might use forward slashes on Windows)
-	fwd := strings.ReplaceAll(absWorkDir, "\\", "/")
-	candidates = append(candidates, strings.ReplaceAll(fwd, "/", "-"))
+	candidates := projectDirCandidates(absWorkDir)
 
 	for _, key := range candidates {
 		dir := filepath.Join(projectsBase, key)
@@ -845,4 +854,21 @@ func findProjectDir(homeDir, absWorkDir string) string {
 	}
 
 	return ""
+}
+
+func projectDirCandidates(absWorkDir string) []string {
+	// Build candidate keys: different ways Claude Code might encode the path.
+	// Claude Code replaces path separators, colons, and underscores with "-".
+	candidates := []string{
+		// Unix-style: replace OS separator with "-"
+		strings.ReplaceAll(absWorkDir, string(filepath.Separator), "-"),
+		// Windows: replace both "\" and ":" with "-"
+		strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(absWorkDir),
+		// Claude Code also replaces underscores with "-"
+		strings.NewReplacer("/", "-", "\\", "-", ":", "-", "_", "-").Replace(absWorkDir),
+	}
+	// Also try with forward slashes (config might use forward slashes on Windows)
+	fwd := strings.ReplaceAll(absWorkDir, "\\", "/")
+	candidates = append(candidates, strings.ReplaceAll(fwd, "/", "-"))
+	return candidates
 }

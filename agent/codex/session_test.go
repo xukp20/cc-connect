@@ -311,6 +311,77 @@ func TestSend_HandlesLargeJSONLines(t *testing.T) {
 	}
 }
 
+func TestSend_FlushesPendingTextWhenToolOnlyCompletesWithoutItemStarted(t *testing.T) {
+	workDir := t.TempDir()
+	binDir := filepath.Join(workDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	payload := strings.Join([]string{
+		`{"type":"thread.started","thread_id":"thread-tool-complete"}`,
+		`{"type":"item.completed","item":{"type":"agent_message","content":[{"type":"output_text","text":"before tool"}]}}`,
+		`{"type":"item.completed","item":{"type":"command_execution","command":"echo hi","status":"completed","aggregated_output":"hi","exit_code":0}}`,
+		`{"type":"turn.completed"}`,
+	}, "\n") + "\n"
+
+	payloadFile := filepath.Join(workDir, "payload.jsonl")
+	if err := os.WriteFile(payloadFile, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+
+	script := "#!/bin/sh\ncat \"$CODEX_PAYLOAD_FILE\"\n"
+	scriptPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+
+	t.Setenv("CODEX_PAYLOAD_FILE", payloadFile)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cs, err := newCodexSession(context.Background(), workDir, "", "", "", "", nil)
+	if err != nil {
+		t.Fatalf("newCodexSession: %v", err)
+	}
+	defer cs.Close()
+
+	if err := cs.Send("hello", nil, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	var gotEvents []core.Event
+	timeout := time.After(5 * time.Second)
+
+	for {
+		select {
+		case evt := <-cs.Events():
+			gotEvents = append(gotEvents, evt)
+			if evt.Type == core.EventResult && evt.Done {
+				goto done
+			}
+			if evt.Type == core.EventError {
+				t.Fatalf("unexpected error event: %v", evt.Error)
+			}
+		case <-timeout:
+			t.Fatalf("timed out waiting for events, got=%#v", gotEvents)
+		}
+	}
+
+done:
+	if len(gotEvents) != 3 {
+		t.Fatalf("event count = %d, want 3, events=%#v", len(gotEvents), gotEvents)
+	}
+	if gotEvents[0].Type != core.EventThinking || gotEvents[0].Content != "before tool" {
+		t.Fatalf("first event = %#v, want EventThinking before tool", gotEvents[0])
+	}
+	if gotEvents[1].Type != core.EventToolResult || gotEvents[1].ToolName != "Bash" {
+		t.Fatalf("second event = %#v, want Bash tool result", gotEvents[1])
+	}
+	if gotEvents[2].Type != core.EventResult || !gotEvents[2].Done {
+		t.Fatalf("third event = %#v, want final EventResult", gotEvents[2])
+	}
+}
+
 func TestWaitForArgsFile_WaitsForNonEmptyContent(t *testing.T) {
 	workDir := t.TempDir()
 	argsFile := filepath.Join(workDir, "args.txt")

@@ -427,6 +427,13 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 	itemType, _ := item["type"].(string)
 	slog.Debug("codexSession: item.completed", "item_type", itemType)
 
+	if itemType != "reasoning" && itemType != "agent_message" && itemType != "message" {
+		// Some Codex payloads only emit item.completed for tool items. Flush any
+		// buffered assistant text here as thinking so it is not delayed until the
+		// final turn.completed event.
+		cs.flushPendingAsThinking()
+	}
+
 	switch itemType {
 	case "reasoning":
 		text := extractItemText(item, "summary", "summary_text")

@@ -1157,7 +1157,7 @@ func (p *Platform) downloadFile(fileID string) ([]byte, error) {
 
 	resp, err := p.httpClient.Get(link)
 	if err != nil {
-		return nil, fmt.Errorf("download file %s: %w", fileID, err)
+		return nil, fmt.Errorf("download file %s: %s", fileID, core.RedactToken(err.Error(), p.token))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

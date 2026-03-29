@@ -30,11 +30,11 @@ func MergeEnv(base, extra []string) []string {
 }
 
 // CheckAllowFrom logs a security warning at startup when allow_from is not
-// configured (defaults to permit-all). Platforms should call this during init.
+// configured. Platforms should call this during init.
 func CheckAllowFrom(platform, allowFrom string) {
 	if strings.TrimSpace(allowFrom) == "" {
-		slog.Warn("allow_from is not set — all users are permitted. "+
-			"Set allow_from in config to restrict access.",
+		slog.Warn("allow_from is not set — all users are denied. "+
+			"Set allow_from in config, or use '*' to allow everyone explicitly.",
 			"platform", platform)
 	}
 }
@@ -49,11 +49,15 @@ func RedactToken(text, token string) string {
 }
 
 // AllowList checks whether a user ID is permitted based on a comma-separated
-// allow_from string. Returns true if allowFrom is empty or "*" (allow all),
-// or if the userID is in the list. Comparison is case-insensitive.
+// allow_from string. Returns true only if allowFrom is "*" (allow all),
+// or if the userID is in the list. Empty allowFrom denies all users.
+// Comparison is case-insensitive.
 func AllowList(allowFrom, userID string) bool {
 	allowFrom = strings.TrimSpace(allowFrom)
-	if allowFrom == "" || allowFrom == "*" {
+	if allowFrom == "" {
+		return false
+	}
+	if allowFrom == "*" {
 		return true
 	}
 	for _, id := range strings.Split(allowFrom, ",") {

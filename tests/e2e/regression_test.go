@@ -383,10 +383,10 @@ func TestRegression_CommandInjection(t *testing.T) {
 			expected:  false,
 		},
 		{
-			name:      "empty allow all",
+			name:      "empty deny all",
 			allowFrom: "",
 			userID:    "anyone",
-			expected:  true,
+			expected:  false,
 		},
 		{
 			name:      "wildcard all",
@@ -1176,5 +1176,4 @@ func TestRegression_CronCancel(t *testing.T) {
 
 	t.Log("Cron cancel: PASS")
 }
-
 

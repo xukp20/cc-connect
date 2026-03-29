@@ -69,18 +69,18 @@ func (t *stubTypingTicker) C() <-chan time.Time {
 func (t *stubTypingTicker) Stop() {}
 
 type stubTelegramBot struct {
-	mu                    sync.Mutex
-	sendMessageCalls      int
-	sendPhotoCalls        int
-	sendDocumentCalls     int
-	sendVoiceCalls        int
-	sendAudioCalls        int
-	sendChatActionCalls   int
-	editMessageTextCalls  int
-	deleteMessageCalls    int
-	answerCallbackCalls   int
-	setMyCommandsCalls    int
-	getFileCalls          int
+	mu                   sync.Mutex
+	sendMessageCalls     int
+	sendPhotoCalls       int
+	sendDocumentCalls    int
+	sendVoiceCalls       int
+	sendAudioCalls       int
+	sendChatActionCalls  int
+	editMessageTextCalls int
+	deleteMessageCalls   int
+	answerCallbackCalls  int
+	setMyCommandsCalls   int
+	getFileCalls         int
 
 	sendErr    error
 	getFileErr error
@@ -222,6 +222,20 @@ func (b *stubTelegramBot) GetFileCallCount() int {
 	return b.getFileCalls
 }
 
+type tokenLinkTelegramBot struct {
+	*stubTelegramBot
+	link string
+}
+
+func (b *tokenLinkTelegramBot) FileDownloadLink(_ *models.File) string {
+	return b.link
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
 
 func TestPlatformStart_RetriesInBackgroundUntilConnected(t *testing.T) {
 	var attempts atomic.Int32
@@ -263,6 +277,36 @@ func TestPlatformStart_RetriesInBackgroundUntilConnected(t *testing.T) {
 
 	if got := attempts.Load(); got < 2 {
 		t.Fatalf("attempts = %d, want >= 2", got)
+	}
+}
+
+func TestDownloadFile_RedactsTokenInHTTPError(t *testing.T) {
+	const token = "secret-token"
+	stubBot := &tokenLinkTelegramBot{
+		stubTelegramBot: newStubTelegramBot(),
+		link:            "https://api.telegram.org/file/bot" + token + "/photos/file_1.jpg",
+	}
+	stubBot.file = &models.File{FilePath: "photos/file_1.jpg"}
+
+	p := &Platform{
+		token: token,
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return nil, fmt.Errorf("Get %q: context deadline exceeded", req.URL.String())
+			}),
+		},
+	}
+	p.publishBot(stubBot, &models.User{ID: 1, Username: "bot"})
+
+	_, err := p.downloadFile("file123")
+	if err == nil {
+		t.Fatal("expected downloadFile error")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("error leaked token: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("error = %q, want [REDACTED]", err.Error())
 	}
 }
 
@@ -848,6 +892,7 @@ func TestHandleMessageWithForumTopic(t *testing.T) {
 	handled := make(chan *core.Message, 1)
 	p := &Platform{
 		token:         "token",
+		allowFrom:     "*",
 		httpClient:    &http.Client{},
 		groupReplyAll: true,
 	}
@@ -892,6 +937,7 @@ func TestHandleMessageNonForumIgnoresThreadID(t *testing.T) {
 	handled := make(chan *core.Message, 1)
 	p := &Platform{
 		token:         "token",
+		allowFrom:     "*",
 		httpClient:    &http.Client{},
 		groupReplyAll: true,
 	}

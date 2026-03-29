@@ -387,6 +387,7 @@ const (
 
 	MsgNewSessionCreated     MsgKey = "new_session_created"
 	MsgNewSessionCreatedName MsgKey = "new_session_created_name"
+	MsgSessionCleared        MsgKey = "session_cleared"
 
 	MsgDeleteUsage              MsgKey = "delete_usage"
 	MsgDeleteSuccess            MsgKey = "delete_success"
@@ -449,6 +450,7 @@ const (
 	MsgSearchHint     MsgKey = "search_hint"
 
 	MsgBuiltinCmdNew       MsgKey = "new"
+	MsgBuiltinCmdClear     MsgKey = "clear"
 	MsgBuiltinCmdList      MsgKey = "list"
 	MsgBuiltinCmdSearch    MsgKey = "search"
 	MsgBuiltinCmdSwitch    MsgKey = "switch"
@@ -813,6 +815,7 @@ var messages = map[MsgKey]map[Language]string{
 	MsgHelp: {
 		LangEnglish: "📖 Available Commands\n\n" +
 			"/new [name]\n  Start a new session\n\n" +
+			"/clear\n  Clear current session context in place\n\n" +
 			"/list\n  List agent sessions\n\n" +
 			"/search <keyword>\n  Search sessions by name or ID\n\n" +
 			"/switch <number>\n  Resume a session by its list number\n\n" +
@@ -856,6 +859,7 @@ var messages = map[MsgKey]map[Language]string{
 			"Permission modes: default / edit / plan / yolo",
 		LangChinese: "📖 可用命令\n\n" +
 			"/new [名称]\n  创建新会话\n\n" +
+			"/clear\n  原地清空当前会话上下文\n\n" +
 			"/list\n  列出 Agent 会话列表\n\n" +
 			"/search <关键词>\n  搜索会话名称或 ID\n\n" +
 			"/switch <序号>\n  按列表序号切换会话\n\n" +
@@ -899,6 +903,7 @@ var messages = map[MsgKey]map[Language]string{
 			"权限模式：default / edit / plan / yolo",
 		LangTraditionalChinese: "📖 可用命令\n\n" +
 			"/new [名稱]\n  建立新會話\n\n" +
+			"/clear\n  原地清空當前會話上下文\n\n" +
 			"/list\n  列出 Agent 會話列表\n\n" +
 			"/search <關鍵詞>\n  搜尋會話名稱或 ID\n\n" +
 			"/switch <序號>\n  按列表序號切換會話\n\n" +
@@ -942,6 +947,7 @@ var messages = map[MsgKey]map[Language]string{
 			"權限模式：default / edit / plan / yolo",
 		LangJapanese: "📖 利用可能なコマンド\n\n" +
 			"/new [名前]\n  新しいセッションを開始\n\n" +
+			"/clear\n  現在のセッションコンテキストをその場でクリア\n\n" +
 			"/list\n  エージェントセッション一覧\n\n" +
 			"/switch <番号>\n  リスト番号でセッションを切り替え\n\n" +
 			"/delete <番号>|1,2,3|3-7|1,3-5,8\n  リスト番号でセッションを単体/複数削除\n\n" +
@@ -984,6 +990,7 @@ var messages = map[MsgKey]map[Language]string{
 			"権限モード: default / edit / plan / yolo",
 		LangSpanish: "📖 Comandos disponibles\n\n" +
 			"/new [nombre]\n  Iniciar una nueva sesión\n\n" +
+			"/clear\n  Borrar el contexto de la sesión actual sin crear otra\n\n" +
 			"/list\n  Listar sesiones del agente\n\n" +
 			"/switch <número>\n  Reanudar sesión por su número en la lista\n\n" +
 			"/delete <número>|1,2,3|3-7|1,3-5,8\n  Eliminar una o varias sesiones por número de lista\n\n" +
@@ -1035,6 +1042,7 @@ var messages = map[MsgKey]map[Language]string{
 	MsgHelpSessionSection: {
 		LangEnglish: "**Session Management**\n" +
 			"/new [name] — Start a new session\n" +
+			"/clear — Clear current session context in place\n" +
 			"/list — List agent sessions\n" +
 			"/search <keyword> — Search sessions\n" +
 			"/switch <number> — Resume a session\n" +
@@ -1044,6 +1052,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/history [n] — Show last n messages",
 		LangChinese: "**会话管理**\n" +
 			"/new [名称] — 创建新会话\n" +
+			"/clear — 原地清空当前会话上下文\n" +
 			"/list — 列出会话列表\n" +
 			"/search <关键词> — 搜索会话\n" +
 			"/switch <序号> — 切换会话\n" +
@@ -1053,6 +1062,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/history [n] — 查看最近 n 条消息",
 		LangTraditionalChinese: "**會話管理**\n" +
 			"/new [名稱] — 建立新會話\n" +
+			"/clear — 原地清空當前會話上下文\n" +
 			"/list — 列出會話列表\n" +
 			"/search <關鍵詞> — 搜尋會話\n" +
 			"/switch <序號> — 切換會話\n" +
@@ -1062,6 +1072,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/history [n] — 查看最近 n 條訊息",
 		LangJapanese: "**セッション管理**\n" +
 			"/new [名前] — 新しいセッションを開始\n" +
+			"/clear — 現在のセッションコンテキストをその場でクリア\n" +
 			"/list — セッション一覧\n" +
 			"/search <キーワード> — セッション検索\n" +
 			"/switch <番号> — セッション切り替え\n" +
@@ -1071,6 +1082,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/history [n] — 直近 n 件のメッセージを表示",
 		LangSpanish: "**Gestión de sesiones**\n" +
 			"/new [nombre] — Iniciar nueva sesión\n" +
+			"/clear — Borrar el contexto de la sesión actual sin crear otra\n" +
 			"/list — Listar sesiones\n" +
 			"/search <keyword> — Buscar sesiones\n" +
 			"/switch <número> — Reanudar sesión\n" +
@@ -1125,6 +1137,7 @@ var messages = map[MsgKey]map[Language]string{
 		LangEnglish: "**Tools & Automation**\n" +
 			"/shell <command> — Run a shell command\n" +
 			"/dir [path|reset] — Show, switch, or reset work directory\n" +
+			"/clear — Clear current session context\n" +
 			"/cron [add|list|del|...] — Scheduled tasks\n" +
 			"/commands [add|del] — Custom commands\n" +
 			"/alias [add|del] — Command aliases\n" +
@@ -1134,6 +1147,7 @@ var messages = map[MsgKey]map[Language]string{
 		LangChinese: "**工具与自动化**\n" +
 			"/shell <命令> — 执行 Shell 命令\n" +
 			"/dir [路径|reset] — 查看、切换或重置工作目录\n" +
+			"/clear — 清空当前会话上下文\n" +
 			"/cron [add|list|del|...] — 定时任务\n" +
 			"/commands [add|del] — 自定义命令\n" +
 			"/alias [add|del] — 命令别名\n" +
@@ -1143,6 +1157,7 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "**工具與自動化**\n" +
 			"/shell <命令> — 執行 Shell 命令\n" +
 			"/dir [路徑|reset] — 查看、切換或重置工作目錄\n" +
+			"/clear — 清空當前會話上下文\n" +
 			"/cron [add|list|del|...] — 定時任務\n" +
 			"/commands [add|del] — 自訂命令\n" +
 			"/alias [add|del] — 命令別名\n" +
@@ -1152,6 +1167,7 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese: "**ツール・自動化**\n" +
 			"/shell <コマンド> — シェルコマンド実行\n" +
 			"/dir [パス|reset] — 作業ディレクトリの表示/切り替え/リセット\n" +
+			"/clear — 現在のセッションコンテキストをクリア\n" +
 			"/cron [add|list|del|...] — スケジュールタスク\n" +
 			"/commands [add|del] — カスタムコマンド\n" +
 			"/alias [add|del] — コマンドエイリアス\n" +
@@ -1161,6 +1177,7 @@ var messages = map[MsgKey]map[Language]string{
 		LangSpanish: "**Herramientas y automatización**\n" +
 			"/shell <comando> — Ejecutar comando shell\n" +
 			"/dir [ruta|reset] — Ver, cambiar o restablecer directorio de trabajo\n" +
+			"/clear — Borrar el contexto de la sesión actual\n" +
 			"/cron [add|list|del|...] — Tareas programadas\n" +
 			"/commands [add|del] — Comandos personalizados\n" +
 			"/alias [add|del] — Alias de comandos\n" +
@@ -2647,6 +2664,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese:           "✅ 新しいセッションを作成しました：**%s**",
 		LangSpanish:            "✅ Nueva sesión creada: **%s**",
 	},
+	MsgSessionCleared: {
+		LangEnglish:            "🧹 Current session context cleared",
+		LangChinese:            "🧹 当前会话上下文已清空",
+		LangTraditionalChinese: "🧹 當前會話上下文已清空",
+		LangJapanese:           "🧹 現在のセッションコンテキストをクリアしました",
+		LangSpanish:            "🧹 Se borró el contexto de la sesión actual",
+	},
 	MsgDeleteUsage: {
 		LangEnglish:            "Usage: `/delete <number>` or `/delete 1,2,3` or `/delete 3-7` or `/delete 1,3-5,8`.\nUse `/list` to see session numbers.",
 		LangChinese:            "用法：`/delete <序号>`，或 `/delete 1,2,3`，或 `/delete 3-7`，或 `/delete 1,3-5,8`。\n使用 `/list` 查看会话序号。",
@@ -3001,6 +3025,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "建立新會話，參數: [名稱]",
 		LangJapanese:           "新しいセッションを開始、引数: [名前]",
 		LangSpanish:            "Iniciar una nueva sesión, arg: [nombre]",
+	},
+	MsgBuiltinCmdClear: {
+		LangEnglish:            "Clear the current session context in place",
+		LangChinese:            "原地清空当前会话上下文",
+		LangTraditionalChinese: "原地清空當前會話上下文",
+		LangJapanese:           "現在のセッションコンテキストをその場でクリア",
+		LangSpanish:            "Borrar el contexto de la sesión actual sin crear otra",
 	},
 	MsgBuiltinCmdList: {
 		LangEnglish:            "List agent sessions",

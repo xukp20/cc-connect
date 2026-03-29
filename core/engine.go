@@ -2711,6 +2711,7 @@ var builtinCommands = []struct {
 	id    string
 }{
 	{[]string{"new"}, "new"},
+	{[]string{"clear"}, "clear"},
 	{[]string{"list", "sessions"}, "list"},
 	{[]string{"switch"}, "switch"},
 	{[]string{"name", "rename"}, "name"},
@@ -2864,6 +2865,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 	switch cmdID {
 	case "new":
 		e.cmdNew(p, msg, args)
+	case "clear":
+		e.cmdClear(p, msg)
 	case "list":
 		e.cmdList(p, msg, args)
 	case "switch":
@@ -3222,6 +3225,23 @@ func (e *Engine) cmdNew(p Platform, msg *Message, args []string) {
 	} else {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgNewSessionCreated))
 	}
+}
+
+func (e *Engine) cmdClear(p Platform, msg *Message) {
+	_, sessions, interactiveKey, err := e.commandContext(p, msg)
+	if err != nil {
+		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
+		return
+	}
+
+	e.cleanupInteractiveState(interactiveKey)
+
+	session := sessions.GetOrCreateActive(msg.SessionKey)
+	session.SetAgentSessionID("", "")
+	session.ClearHistory()
+	sessions.Save()
+
+	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgSessionCleared))
 }
 
 const listPageSize = 20

@@ -1946,6 +1946,65 @@ func TestQuietSessionResetsOnNewSession(t *testing.T) {
 	}
 }
 
+func TestHandleCommand_ClearClearsCurrentSessionInPlace(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+
+	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
+	s := e.sessions.NewSession(msg.SessionKey, "named session")
+	s.SetAgentSessionID("existing-session", "stub")
+	s.AddHistory("user", "hello")
+	s.AddHistory("assistant", "world")
+
+	running := newControllableSession("existing-session")
+	e.interactiveMu.Lock()
+	e.interactiveStates[msg.SessionKey] = &interactiveState{
+		agentSession: running,
+		platform:     p,
+		replyCtx:     msg.ReplyCtx,
+	}
+	e.interactiveMu.Unlock()
+
+	if ok := e.handleCommand(p, msg, "/clear"); !ok {
+		t.Fatal("expected /clear to be handled as a builtin command")
+	}
+
+	if got := e.sessions.ActiveSessionID(msg.SessionKey); got != s.ID {
+		t.Fatalf("active session ID = %q, want preserved %q", got, s.ID)
+	}
+	cleared := e.sessions.FindByID(s.ID)
+	if cleared == nil {
+		t.Fatal("expected current session to still exist")
+	}
+	if got := cleared.GetName(); got != "named session" {
+		t.Fatalf("session name = %q, want preserved name", got)
+	}
+	if got := cleared.GetAgentSessionID(); got != "" {
+		t.Fatalf("AgentSessionID = %q, want cleared", got)
+	}
+	if history := cleared.GetHistory(0); len(history) != 0 {
+		t.Fatalf("history length = %d, want 0", len(history))
+	}
+
+	e.interactiveMu.Lock()
+	_, ok := e.interactiveStates[msg.SessionKey]
+	e.interactiveMu.Unlock()
+	if ok {
+		t.Fatal("expected running interactive state to be removed")
+	}
+
+	select {
+	case <-running.closed:
+	default:
+		t.Fatal("expected running session to be closed")
+	}
+
+	sent := p.getSent()
+	if len(sent) != 1 || !strings.Contains(sent[0], e.i18n.T(MsgSessionCleared)) {
+		t.Fatalf("sent = %v, want session cleared reply", sent)
+	}
+}
+
 func TestQuietGlobalToggle(t *testing.T) {
 	e := newTestEngine()
 	p := &stubPlatformEngine{n: "test"}

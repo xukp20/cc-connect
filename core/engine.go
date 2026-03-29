@@ -5684,6 +5684,30 @@ func (e *Engine) SendToSession(sessionKey, message string) error {
 	return e.SendToSessionWithAttachments(sessionKey, message, nil, nil)
 }
 
+func (e *Engine) reconstructSendTarget(sessionKey string) (Platform, any, error) {
+	platformName := extractPlatformName(sessionKey)
+	if platformName == "" {
+		return nil, nil, fmt.Errorf("no active session found (key=%q)", sessionKey)
+	}
+
+	for _, p := range e.platforms {
+		if p.Name() != platformName {
+			continue
+		}
+		rc, ok := p.(ReplyContextReconstructor)
+		if !ok {
+			return nil, nil, fmt.Errorf("platform %q does not support proactive messaging", platformName)
+		}
+		replyCtx, err := rc.ReconstructReplyCtx(sessionKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("reconstruct reply context: %w", err)
+		}
+		return p, replyCtx, nil
+	}
+
+	return nil, nil, fmt.Errorf("platform %q not found for session %q", platformName, sessionKey)
+}
+
 func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images []ImageAttachment, files []FileAttachment) error {
 	e.interactiveMu.Lock()
 
@@ -5714,17 +5738,36 @@ func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images
 	}
 	e.interactiveMu.Unlock()
 
-	if state == nil {
-		return fmt.Errorf("no active session found (key=%q)", sessionKey)
+	var (
+		p        Platform
+		replyCtx any
+	)
+	if state != nil {
+		state.mu.Lock()
+		p = state.platform
+		replyCtx = state.replyCtx
+		state.mu.Unlock()
 	}
 
-	state.mu.Lock()
-	p := state.platform
-	replyCtx := state.replyCtx
-	state.mu.Unlock()
-
 	if p == nil {
-		return fmt.Errorf("no active session found (key=%q)", sessionKey)
+		resolvedKey := sessionKey
+		if resolvedKey == "" {
+			activeKeys := e.sessions.ActiveSessionKeys()
+			if len(activeKeys) > 1 && (len(images) > 0 || len(files) > 0) {
+				return fmt.Errorf("multiple active sessions; must specify --session to send attachments")
+			}
+			if len(activeKeys) > 0 {
+				resolvedKey = activeKeys[0]
+			}
+		}
+		if resolvedKey == "" {
+			return fmt.Errorf("no active session found (key=%q)", sessionKey)
+		}
+		var err error
+		p, replyCtx, err = e.reconstructSendTarget(resolvedKey)
+		if err != nil {
+			return err
+		}
 	}
 
 	if message == "" && len(images) == 0 && len(files) == 0 {

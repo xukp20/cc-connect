@@ -256,6 +256,16 @@ func (p *stubMediaPlatform) SendFile(_ context.Context, _ any, file FileAttachme
 	return nil
 }
 
+type stubReconstructingMediaPlatform struct {
+	stubMediaPlatform
+	reconstructedKeys []string
+}
+
+func (p *stubReconstructingMediaPlatform) ReconstructReplyCtx(sessionKey string) (any, error) {
+	p.reconstructedKeys = append(p.reconstructedKeys, sessionKey)
+	return "reconstructed:" + sessionKey, nil
+}
+
 type stubInlineButtonPlatform struct {
 	stubPlatformEngine
 	buttonContent string
@@ -646,6 +656,42 @@ func TestEngineSendToSessionWithAttachments_MultiWorkspaceRawSessionKey(t *testi
 	}
 	if got := p.getSent(); len(got) != 1 || got[0] != "delivery ready" {
 		t.Fatalf("sent text = %#v, want one message", got)
+	}
+}
+
+func TestEngineSendToSessionWithAttachments_ReconstructsReplyContextFromPersistedSessionKey(t *testing.T) {
+	p := &stubReconstructingMediaPlatform{stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "qqbot"}}}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+
+	e.sessions.GetOrCreateActive("qqbot:user-openid")
+
+	err := e.SendToSessionWithAttachments("qqbot:user-openid", "delivery ready", nil, nil)
+	if err != nil {
+		t.Fatalf("SendToSessionWithAttachments returned error: %v", err)
+	}
+	if got := p.getSent(); len(got) != 1 || got[0] != "delivery ready" {
+		t.Fatalf("sent text = %#v, want one message", got)
+	}
+	if got := p.reconstructedKeys; len(got) != 1 || got[0] != "qqbot:user-openid" {
+		t.Fatalf("reconstructed keys = %#v, want qqbot:user-openid", got)
+	}
+}
+
+func TestEngineSendToSessionWithAttachments_UsesSinglePersistedActiveSessionWhenNoInteractiveStateExists(t *testing.T) {
+	p := &stubReconstructingMediaPlatform{stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "qqbot"}}}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+
+	e.sessions.GetOrCreateActive("qqbot:user-openid")
+
+	err := e.SendToSessionWithAttachments("", "delivery ready", nil, nil)
+	if err != nil {
+		t.Fatalf("SendToSessionWithAttachments returned error: %v", err)
+	}
+	if got := p.getSent(); len(got) != 1 || got[0] != "delivery ready" {
+		t.Fatalf("sent text = %#v, want one message", got)
+	}
+	if got := p.reconstructedKeys; len(got) != 1 || got[0] != "qqbot:user-openid" {
+		t.Fatalf("reconstructed keys = %#v, want qqbot:user-openid", got)
 	}
 }
 

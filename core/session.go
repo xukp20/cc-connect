@@ -284,6 +284,21 @@ func (sm *SessionManager) ActiveSessionID(userKey string) string {
 	return sm.activeSession[userKey]
 }
 
+// ActiveSessionKeys returns the user/session keys that currently have a valid
+// active session entry persisted in the manager.
+func (sm *SessionManager) ActiveSessionKeys() []string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	keys := make([]string, 0, len(sm.activeSession))
+	for userKey, sid := range sm.activeSession {
+		if _, ok := sm.sessions[sid]; ok {
+			keys = append(keys, userKey)
+		}
+	}
+	return keys
+}
+
 // SetSessionName sets a custom display name for an agent session.
 func (sm *SessionManager) SetSessionName(agentSessionID, name string) {
 	sm.mu.Lock()

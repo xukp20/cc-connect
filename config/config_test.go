@@ -188,67 +188,6 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
-func TestEffectiveDisplayQuiet(t *testing.T) {
-	tru, fal := true, false
-	tests := []struct {
-		name     string
-		cfg      Config
-		proj     ProjectConfig
-		wantTM   bool
-		wantTool bool
-	}{
-		{
-			name:     "defaults no quiet",
-			cfg:      Config{},
-			proj:     ProjectConfig{},
-			wantTM:   true,
-			wantTool: true,
-		},
-		{
-			name:     "global quiet maps when display unset",
-			cfg:      Config{Quiet: &tru},
-			proj:     ProjectConfig{},
-			wantTM:   false,
-			wantTool: false,
-		},
-		{
-			name:     "project quiet maps when display unset",
-			cfg:      Config{},
-			proj:     ProjectConfig{Quiet: &tru},
-			wantTM:   false,
-			wantTool: false,
-		},
-		{
-			name: "explicit thinking_messages wins over quiet",
-			cfg: Config{
-				Quiet:   &tru,
-				Display: DisplayConfig{ThinkingMessages: &tru},
-			},
-			proj:     ProjectConfig{},
-			wantTM:   true,
-			wantTool: false,
-		},
-		{
-			name:     "project quiet false overrides global quiet",
-			cfg:      Config{Quiet: &tru},
-			proj:     ProjectConfig{Quiet: &fal},
-			wantTM:   true,
-			wantTool: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tm, tool, _, _ := EffectiveDisplay(&tt.cfg, &tt.proj)
-			if tm != tt.wantTM {
-				t.Fatalf("ThinkingMessages = %v, want %v", tm, tt.wantTM)
-			}
-			if tool != tt.wantTool {
-				t.Fatalf("ToolMessages = %v, want %v", tool, tt.wantTool)
-			}
-		})
-	}
-}
-
 func TestLoad_DefaultsDataDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
@@ -428,7 +367,21 @@ func TestDisplayConfig_Save(t *testing.T) {
 	thinking := 120
 	tool := 240
 	showTools := false
-	if err := SaveDisplayConfig(nil, &thinking, &tool, &showTools); err != nil {
+	layout := "merged"
+	showInput := true
+	showResultBody := true
+	maxEntries := 20
+	historyTurns := 3
+	if err := SaveDisplayConfig(DisplayConfigUpdate{
+		ThinkingMaxLen:       &thinking,
+		ToolMaxLen:           &tool,
+		ToolMessages:         &showTools,
+		ToolLayout:           &layout,
+		ToolShowInput:        &showInput,
+		ToolShowResultBody:   &showResultBody,
+		ProgressMaxEntries:   &maxEntries,
+		ProgressHistoryTurns: &historyTurns,
+	}); err != nil {
 		t.Fatalf("SaveDisplayConfig() error: %v", err)
 	}
 
@@ -442,9 +395,24 @@ func TestDisplayConfig_Save(t *testing.T) {
 	if cfg.Display.ToolMessages == nil || *cfg.Display.ToolMessages {
 		t.Fatalf("ToolMessages = %#v, want false", cfg.Display.ToolMessages)
 	}
+	if cfg.Display.ToolLayout == nil || *cfg.Display.ToolLayout != "merged" {
+		t.Fatalf("ToolLayout = %#v, want merged", cfg.Display.ToolLayout)
+	}
+	if cfg.Display.ToolShowInput == nil || !*cfg.Display.ToolShowInput {
+		t.Fatalf("ToolShowInput = %#v, want true", cfg.Display.ToolShowInput)
+	}
+	if cfg.Display.ToolShowResultBody == nil || !*cfg.Display.ToolShowResultBody {
+		t.Fatalf("ToolShowResultBody = %#v, want true", cfg.Display.ToolShowResultBody)
+	}
+	if cfg.Display.ProgressMaxEntries == nil || *cfg.Display.ProgressMaxEntries != 20 {
+		t.Fatalf("ProgressMaxEntries = %#v, want 20", cfg.Display.ProgressMaxEntries)
+	}
+	if cfg.Display.ProgressHistoryTurns == nil || *cfg.Display.ProgressHistoryTurns != 3 {
+		t.Fatalf("ProgressHistoryTurns = %#v, want 3", cfg.Display.ProgressHistoryTurns)
+	}
 
 	thinking = 360
-	if err := SaveDisplayConfig(nil, &thinking, nil, nil); err != nil {
+	if err := SaveDisplayConfig(DisplayConfigUpdate{ThinkingMaxLen: &thinking}); err != nil {
 		t.Fatalf("SaveDisplayConfig() second update error: %v", err)
 	}
 

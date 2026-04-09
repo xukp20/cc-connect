@@ -10,36 +10,41 @@ type suppressTestPlatform struct {
 	style string
 }
 
-func (s *suppressTestPlatform) Name() string { return "test" }
-func (s *suppressTestPlatform) Start(MessageHandler) error { return nil }
+func (s *suppressTestPlatform) Name() string                             { return "test" }
+func (s *suppressTestPlatform) Start(MessageHandler) error               { return nil }
 func (s *suppressTestPlatform) Reply(context.Context, any, string) error { return nil }
-func (s *suppressTestPlatform) Send(context.Context, any, string) error { return nil }
-func (s *suppressTestPlatform) Stop() error { return nil }
-func (s *suppressTestPlatform) ProgressStyle() string { return s.style }
+func (s *suppressTestPlatform) Send(context.Context, any, string) error  { return nil }
+func (s *suppressTestPlatform) Stop() error                              { return nil }
+func (s *suppressTestPlatform) ProgressStyle() string                    { return s.style }
 
 func TestSuppressStandaloneToolResultEvent(t *testing.T) {
-	if SuppressStandaloneToolResultEvent(&stubPlatformNoProgress{}) {
+	display := DefaultDisplayCfg()
+	if SuppressStandaloneToolResultEvent(&stubPlatformNoProgress{}, display) {
 		t.Fatal("platform without ProgressStyleProvider should not suppress")
 	}
-	if !SuppressStandaloneToolResultEvent(&suppressTestPlatform{style: "legacy"}) {
+	if !SuppressStandaloneToolResultEvent(&suppressTestPlatform{style: "legacy"}, display) {
 		t.Fatal("legacy ProgressStyleProvider should suppress standalone tool results")
 	}
-	if SuppressStandaloneToolResultEvent(&suppressTestPlatform{style: "compact"}) {
+	if SuppressStandaloneToolResultEvent(&suppressTestPlatform{style: "compact"}, display) {
 		t.Fatal("compact should not suppress (writer absorbs tool results)")
 	}
-	if SuppressStandaloneToolResultEvent(&suppressTestPlatform{style: "card"}) {
+	if SuppressStandaloneToolResultEvent(&suppressTestPlatform{style: "card"}, display) {
 		t.Fatal("card should not suppress")
+	}
+	display.ProgressStyle = progressStyleLegacy
+	if !SuppressStandaloneToolResultEvent(&suppressTestPlatform{style: "card"}, display) {
+		t.Fatal("display override to legacy should suppress even when platform style is card")
 	}
 }
 
 // stubPlatformNoProgress is a minimal Platform without ProgressStyleProvider.
 type stubPlatformNoProgress struct{}
 
-func (stubPlatformNoProgress) Name() string { return "plain" }
-func (stubPlatformNoProgress) Start(MessageHandler) error { return nil }
+func (stubPlatformNoProgress) Name() string                             { return "plain" }
+func (stubPlatformNoProgress) Start(MessageHandler) error               { return nil }
 func (stubPlatformNoProgress) Reply(context.Context, any, string) error { return nil }
-func (stubPlatformNoProgress) Send(context.Context, any, string) error { return nil }
-func (stubPlatformNoProgress) Stop() error { return nil }
+func (stubPlatformNoProgress) Send(context.Context, any, string) error  { return nil }
+func (stubPlatformNoProgress) Stop() error                              { return nil }
 
 func TestBuildAndParseProgressCardPayload(t *testing.T) {
 	payload := BuildProgressCardPayload([]string{" step1 ", "", "step2"}, true)
@@ -113,5 +118,72 @@ func TestParseProgressCardPayloadRejectsInvalid(t *testing.T) {
 	}
 	if _, ok := ParseProgressCardPayload(ProgressCardPayloadPrefix + `{"entries":[]}`); ok {
 		t.Fatal("expected parse failure for empty entries")
+	}
+}
+
+type progressWriterTestPlatform struct {
+	suppressTestPlatform
+	starts []string
+	edits  []string
+}
+
+func (p *progressWriterTestPlatform) SendPreviewStart(_ context.Context, _ any, content string) (any, error) {
+	p.starts = append(p.starts, content)
+	return "preview", nil
+}
+
+func (p *progressWriterTestPlatform) UpdateMessage(_ context.Context, _ any, content string) error {
+	p.edits = append(p.edits, content)
+	return nil
+}
+
+func (p *progressWriterTestPlatform) SupportsProgressCardPayload() bool { return true }
+
+func TestCompactProgressWriter_MergedToolUpdatesSingleBlock(t *testing.T) {
+	p := &progressWriterTestPlatform{suppressTestPlatform: suppressTestPlatform{style: "card"}}
+	display := DefaultDisplayCfg()
+	display.ToolLayout = toolLayoutMerged
+	w := newCompactProgressWriter(context.Background(), p, "ctx", "Codex", LangEnglish, display)
+
+	if !w.AppendStructured(ProgressCardEntry{
+		Kind:      ProgressEntryToolUse,
+		Tool:      "Bash",
+		ToolInput: "echo hi",
+	}, "echo hi") {
+		t.Fatal("tool use append should succeed")
+	}
+	ok := true
+	exitCode := 0
+	if !w.AppendStructured(ProgressCardEntry{
+		Kind:       ProgressEntryToolResult,
+		Tool:       "Bash",
+		ToolResult: "hi",
+		ExitCode:   &exitCode,
+		Success:    &ok,
+	}, "hi") {
+		t.Fatal("tool result append should succeed")
+	}
+
+	if len(w.items) != 1 {
+		t.Fatalf("items = %d, want 1 merged item", len(w.items))
+	}
+	item := w.items[0]
+	if item.Kind != ProgressEntryToolResult {
+		t.Fatalf("kind = %q, want tool_result", item.Kind)
+	}
+	if item.Running {
+		t.Fatal("item should not remain running after result")
+	}
+	if item.ToolInput != "echo hi" {
+		t.Fatalf("tool input = %q, want echo hi", item.ToolInput)
+	}
+	if item.ToolResult != "hi" {
+		t.Fatalf("tool result = %q, want hi", item.ToolResult)
+	}
+	if len(p.starts) != 1 {
+		t.Fatalf("preview starts = %d, want 1", len(p.starts))
+	}
+	if len(p.edits) != 1 {
+		t.Fatalf("preview edits = %d, want 1", len(p.edits))
 	}
 }

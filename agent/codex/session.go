@@ -418,6 +418,17 @@ func (cs *codexSession) handleItemStarted(raw map[string]any) {
 		case <-cs.ctx.Done():
 			return
 		}
+	case "file_change":
+		evt := core.Event{
+			Type:      core.EventToolUse,
+			ToolName:  "Patch",
+			ToolInput: codexPatchChangesSummary(item["changes"]),
+		}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
 	}
 	// Other tool types (web_search etc.) have empty fields at start;
 	// their EventToolUse is emitted from handleItemCompleted instead.
@@ -510,6 +521,23 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 			ToolName:    "WebSearch",
 			ToolInput:   codexWebSearchInput(item),
 			ToolResult:  truncate(codexWebSearchResultBody(item), 500),
+			ToolStatus:  strings.TrimSpace(status),
+			ToolSuccess: &success,
+		}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
+
+	case "file_change":
+		status, _ := item["status"].(string)
+		success := codexToolSuccess(status, nil)
+		evt := core.Event{
+			Type:        core.EventToolResult,
+			ToolName:    "Patch",
+			ToolInput:   codexPatchChangesSummary(item["changes"]),
+			ToolResult:  truncate(codexPatchResultBody(item), 500),
 			ToolStatus:  strings.TrimSpace(status),
 			ToolSuccess: &success,
 		}

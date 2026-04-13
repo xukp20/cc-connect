@@ -617,7 +617,11 @@ func (s *appServerSession) handleItemStarted(item map[string]any) {
 		s.emit(core.Event{Type: core.EventToolUse, ToolName: tool, ToolInput: appServerJSON(item["arguments"])})
 
 	case "fileChange":
-		s.emit(core.Event{Type: core.EventToolUse, ToolName: "Patch", ToolInput: appServerJSON(item["changes"])})
+		s.emit(core.Event{
+			Type:      core.EventToolUse,
+			ToolName:  "Patch",
+			ToolInput: codexPatchChangesSummary(item["changes"]),
+		})
 	}
 }
 
@@ -698,6 +702,18 @@ func (s *appServerSession) handleItemCompleted(item map[string]any) {
 			Type:        core.EventToolResult,
 			ToolName:    tool,
 			ToolResult:  truncate(strings.TrimSpace(result), 500),
+			ToolStatus:  strings.TrimSpace(status),
+			ToolSuccess: &success,
+		})
+
+	case "fileChange":
+		status, _ := item["status"].(string)
+		success := appServerToolSuccess(status, nil)
+		s.emit(core.Event{
+			Type:        core.EventToolResult,
+			ToolName:    "Patch",
+			ToolInput:   codexPatchChangesSummary(item["changes"]),
+			ToolResult:  truncate(codexPatchResultBody(item), 500),
 			ToolStatus:  strings.TrimSpace(status),
 			ToolSuccess: &success,
 		})

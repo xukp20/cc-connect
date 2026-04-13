@@ -161,6 +161,86 @@ func TestCodexSession_HandleItemCompleted_WebSearchEmitsToolResult(t *testing.T)
 	}
 }
 
+func TestCodexSession_HandleItemStarted_FileChangeEmitsToolUse(t *testing.T) {
+	cs := &codexSession{
+		events: make(chan core.Event, 4),
+		ctx:    context.Background(),
+	}
+	raw := map[string]any{
+		"item": map[string]any{
+			"type": "file_change",
+			"changes": []any{
+				map[string]any{
+					"path": "agent/codex/session.go",
+					"kind": "update",
+				},
+			},
+		},
+	}
+
+	cs.handleItemStarted(raw)
+
+	select {
+	case evt := <-cs.events:
+		if evt.Type != core.EventToolUse {
+			t.Fatalf("event type = %q, want %q", evt.Type, core.EventToolUse)
+		}
+		if evt.ToolName != "Patch" {
+			t.Fatalf("tool name = %q, want Patch", evt.ToolName)
+		}
+		if evt.ToolInput != "changes>\nM agent/codex/session.go" {
+			t.Fatalf("tool input = %q, want readable patch summary", evt.ToolInput)
+		}
+	default:
+		t.Fatal("expected tool use event")
+	}
+}
+
+func TestCodexSession_HandleItemCompleted_FileChangeEmitsToolResult(t *testing.T) {
+	cs := &codexSession{
+		events: make(chan core.Event, 4),
+		ctx:    context.Background(),
+	}
+	raw := map[string]any{
+		"item": map[string]any{
+			"type":   "file_change",
+			"status": "completed",
+			"changes": []any{
+				map[string]any{
+					"path": "agent/codex/session.go",
+					"kind": "update",
+				},
+			},
+		},
+	}
+
+	cs.handleItemCompleted(raw)
+
+	select {
+	case evt := <-cs.events:
+		if evt.Type != core.EventToolResult {
+			t.Fatalf("event type = %q, want %q", evt.Type, core.EventToolResult)
+		}
+		if evt.ToolName != "Patch" {
+			t.Fatalf("tool name = %q, want Patch", evt.ToolName)
+		}
+		if evt.ToolInput != "changes>\nM agent/codex/session.go" {
+			t.Fatalf("tool input = %q, want readable patch summary", evt.ToolInput)
+		}
+		if evt.ToolResult != "" {
+			t.Fatalf("tool result = %q, want empty success body", evt.ToolResult)
+		}
+		if evt.ToolStatus != "completed" {
+			t.Fatalf("tool status = %q, want completed", evt.ToolStatus)
+		}
+		if evt.ToolSuccess == nil || !*evt.ToolSuccess {
+			t.Fatalf("tool success = %#v, want true", evt.ToolSuccess)
+		}
+	default:
+		t.Fatal("expected tool result event")
+	}
+}
+
 func TestBuildExecArgs_ResumeOmitsCdFlag(t *testing.T) {
 	cs, err := newCodexSession(context.Background(), "/tmp/project", "", "", "full-auto", "thread-abc", "", nil)
 	if err != nil {

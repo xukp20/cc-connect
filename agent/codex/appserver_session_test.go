@@ -99,3 +99,79 @@ func TestAppServerSession_HandleItemCompleted_WebSearchBackfillsInputAndFormatsR
 		t.Fatal("expected tool result event")
 	}
 }
+
+func TestAppServerSession_HandleItemStarted_FileChangeUsesReadablePatchSummary(t *testing.T) {
+	s := &appServerSession{
+		events: make(chan core.Event, 4),
+	}
+	item := map[string]any{
+		"type": "fileChange",
+		"changes": []any{
+			map[string]any{
+				"path": "/tmp/1.txt",
+				"kind": map[string]any{"type": "add"},
+				"diff": "hello\n",
+			},
+		},
+	}
+
+	s.handleItemStarted(item)
+
+	select {
+	case evt := <-s.events:
+		if evt.Type != core.EventToolUse {
+			t.Fatalf("event type = %q, want %q", evt.Type, core.EventToolUse)
+		}
+		if evt.ToolName != "Patch" {
+			t.Fatalf("tool name = %q, want Patch", evt.ToolName)
+		}
+		if evt.ToolInput != "changes>\nA /tmp/1.txt" {
+			t.Fatalf("tool input = %q, want readable patch summary", evt.ToolInput)
+		}
+	default:
+		t.Fatal("expected tool use event")
+	}
+}
+
+func TestAppServerSession_HandleItemCompleted_FileChangeEmitsToolResult(t *testing.T) {
+	s := &appServerSession{
+		events: make(chan core.Event, 4),
+	}
+	item := map[string]any{
+		"type":   "fileChange",
+		"status": "completed",
+		"changes": []any{
+			map[string]any{
+				"path": "/tmp/1.txt",
+				"kind": map[string]any{"type": "add"},
+				"diff": "hello\n",
+			},
+		},
+	}
+
+	s.handleItemCompleted(item)
+
+	select {
+	case evt := <-s.events:
+		if evt.Type != core.EventToolResult {
+			t.Fatalf("event type = %q, want %q", evt.Type, core.EventToolResult)
+		}
+		if evt.ToolName != "Patch" {
+			t.Fatalf("tool name = %q, want Patch", evt.ToolName)
+		}
+		if evt.ToolInput != "changes>\nA /tmp/1.txt" {
+			t.Fatalf("tool input = %q, want readable patch summary", evt.ToolInput)
+		}
+		if evt.ToolResult != "" {
+			t.Fatalf("tool result = %q, want empty success body", evt.ToolResult)
+		}
+		if evt.ToolStatus != "completed" {
+			t.Fatalf("tool status = %q, want completed", evt.ToolStatus)
+		}
+		if evt.ToolSuccess == nil || !*evt.ToolSuccess {
+			t.Fatalf("tool success = %#v, want true", evt.ToolSuccess)
+		}
+	default:
+		t.Fatal("expected tool result event")
+	}
+}

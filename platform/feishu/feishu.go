@@ -657,14 +657,11 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 		chatID = *msg.ChatId
 	}
 	userID := ""
-	userName := ""
 	if sender.SenderId != nil && sender.SenderId.OpenId != nil {
 		userID = *sender.SenderId.OpenId
 	}
-	if userID != "" {
-		userName = p.resolveUserName(userID)
-	}
-	chatName := p.resolveChatName(chatID)
+	// userName and chatName are resolved in dispatchMessage to avoid blocking
+	// the SDK dispatcher goroutine with synchronous HTTP calls.
 
 	messageID := ""
 	if msg.MessageId != nil {
@@ -745,7 +742,7 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	// blocked by IO-heavy operations (image/audio download, handler HTTP calls).
 	// The dedup and old-message checks above remain synchronous to guarantee
 	// correctness before spawning the goroutine.
-	go p.dispatchMessage(ctx, msgType, content, mentions, messageID, sessionKey, userID, userName, chatName, rctx, parentID)
+	go p.dispatchMessage(ctx, msgType, content, mentions, messageID, sessionKey, userID, chatID, rctx, parentID)
 
 	return nil
 }
@@ -753,7 +750,14 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 // dispatchMessage handles the message content parsing, media download, and
 // handler invocation. It runs in its own goroutine so that onMessage returns
 // quickly and does not block the SDK event loop.
-func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, messageID, sessionKey, userID, userName, chatName string, rctx replyContext, parentID string) {
+func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, messageID, sessionKey, userID, chatID string, rctx replyContext, parentID string) {
+	// Resolve user and chat names asynchronously so SDK dispatcher is not blocked.
+	userName := ""
+	if userID != "" {
+		userName = p.resolveUserName(userID)
+	}
+	chatName := p.resolveChatName(chatID)
+
 	// If this message is a reply to another message, fetch the quoted content
 	// and prepend it so the agent has full context.
 	quotedPrefix := ""
@@ -2520,11 +2524,86 @@ func isBashToolName(toolName string) bool {
 	}
 }
 
+func isTodoWriteToolName(toolName string) bool {
+	return strings.EqualFold(strings.TrimSpace(toolName), "todowrite")
+}
+
+// todoItem represents a single todo item from TodoWrite tool input.
+type todoItem struct {
+	ActiveForm string `json:"activeForm"`
+	Content    string `json:"content"`
+	Status     string `json:"status"`
+}
+
+// todoWriteInput represents the TodoWrite tool input structure.
+type todoWriteInput struct {
+	Todos []todoItem `json:"todos"`
+}
+
+// formatTodoWriteInput formats TodoWrite JSON input into a readable markdown list.
+// Returns empty string if parsing fails or input is invalid.
+func formatTodoWriteInput(text string, lang string) string {
+	var input todoWriteInput
+	if err := json.Unmarshal([]byte(text), &input); err != nil {
+		return "" // Fall back to default formatting
+	}
+	if len(input.Todos) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	for _, todo := range input.Todos {
+		var icon string
+		switch strings.ToLower(strings.TrimSpace(todo.Status)) {
+		case "completed":
+			icon = "✅"
+		case "in_progress":
+			icon = "🔄"
+		case "pending":
+			icon = "⏳"
+		default:
+			icon = "•"
+		}
+
+		content := strings.TrimSpace(todo.Content)
+		if content == "" {
+			continue
+		}
+
+		// Escape markdown special characters
+		content = strings.ReplaceAll(content, "`", "'")
+
+		sb.WriteString(icon)
+		sb.WriteString(" ")
+		sb.WriteString(content)
+
+		activeForm := strings.TrimSpace(todo.ActiveForm)
+		if activeForm != "" && activeForm != content {
+			sb.WriteString(" _(")
+			sb.WriteString(strings.ReplaceAll(activeForm, "`", "'"))
+			sb.WriteString(")_")
+		}
+		sb.WriteString("\n")
+	}
+
+	return strings.TrimSuffix(sb.String(), "\n")
+}
+
 func formatProgressToolInput(toolName, text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ""
 	}
+
+	// Special handling for TodoWrite tool - format JSON as readable list
+	if isTodoWriteToolName(toolName) {
+		if formatted := formatTodoWriteInput(text, ""); formatted != "" {
+			return formatted
+		}
+		// JSON parsing failed or empty todos - show raw input as text block
+		return fmt.Sprintf("```text\n%s\n```", text)
+	}
+
 	text = preprocessFeishuMarkdown(sanitizeMarkdownURLs(text))
 	if strings.Contains(text, "```") {
 		return text

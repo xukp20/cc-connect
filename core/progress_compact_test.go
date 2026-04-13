@@ -186,7 +186,6 @@ func TestCompactProgressWriter_DoesNotTransformToolResults(t *testing.T) {
 		t.Fatalf("tool result text = %q, want raw %q", got, raw)
 	}
 }
-
 type progressWriterTestPlatform struct {
 	suppressTestPlatform
 	starts []string

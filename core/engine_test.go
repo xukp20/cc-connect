@@ -351,6 +351,12 @@ type stubModelModeAgent struct {
 	active          string
 }
 
+type stubStrictModelAgent struct {
+	stubModelModeAgent
+	models []ModelOption
+	calls  int
+}
+
 type stubLiveModeSession struct {
 	stubAgentSession
 	modes []string
@@ -374,6 +380,11 @@ func (a *stubModelModeAgent) AvailableModels(_ context.Context) []ModelOption {
 		{Name: "gpt-4.1", Desc: "Balanced", Alias: "gpt"},
 		{Name: "gpt-4.1-mini", Desc: "Fast"},
 	}
+}
+
+func (a *stubStrictModelAgent) AvailableModels(_ context.Context) []ModelOption {
+	a.calls++
+	return append([]ModelOption(nil), a.models...)
 }
 
 func (a *stubModelModeAgent) SetProviders(providers []ProviderConfig) {
@@ -462,6 +473,18 @@ func (a *stubWorkDirAgent) SetWorkDir(dir string) {
 
 func (a *stubWorkDirAgent) GetWorkDir() string {
 	return a.workDir
+}
+
+type namedStubWorkDirAgent struct {
+	stubWorkDirAgent
+	name string
+}
+
+func (a *namedStubWorkDirAgent) Name() string {
+	if a.name == "" {
+		return "named-stub-workdir"
+	}
+	return a.name
 }
 
 type stubListAgent struct {
@@ -2864,7 +2887,13 @@ func TestDeleteMode_ActiveSessionMarkedWithArrowAndNotSelectable(t *testing.T) {
 	}}}
 	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
 	msg := &Message{SessionKey: "feishu:user1", ReplyCtx: "ctx"}
-	e.sessions.GetOrCreateActive(msg.SessionKey).SetAgentSessionID("session-1", "test")
+	// Register both sessions so they pass the owned-session filter.
+	s1 := e.sessions.GetOrCreateActive(msg.SessionKey)
+	s1.SetAgentSessionID("session-1", "test")
+	s2 := e.sessions.NewSession(msg.SessionKey, "two")
+	s2.SetAgentSessionID("session-2", "test")
+	// Switch back to s1 as the active session.
+	e.sessions.SwitchSession(msg.SessionKey, s1.ID)
 
 	e.cmdDelete(p, msg, nil)
 	if len(p.repliedCards) != 1 {
@@ -3050,6 +3079,51 @@ func TestCmdModel_UpdatesActiveProviderModel(t *testing.T) {
 	}
 }
 
+func TestCmdModel_DirectNameDoesNotNeedModelListMatch(t *testing.T) {
+	p := &stubPlatformEngine{n: "plain"}
+	agent := &stubStrictModelAgent{}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
+
+	e.cmdModel(p, msg, []string{"switch", "custom/provider-model"})
+
+	if agent.model != "custom/provider-model" {
+		t.Fatalf("agent model = %q, want custom/provider-model", agent.model)
+	}
+	if agent.calls != 0 {
+		t.Fatalf("AvailableModels calls = %d, want 0 for direct name switch", agent.calls)
+	}
+}
+
+func TestCmdModel_AliasWithPunctuationStillResolves(t *testing.T) {
+	p := &stubPlatformEngine{n: "plain"}
+	agent := &stubStrictModelAgent{models: []ModelOption{{Name: "openai/gpt-4.1", Alias: "gpt-4.1"}}}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
+
+	e.cmdModel(p, msg, []string{"switch", "gpt-4.1"})
+
+	if agent.model != "openai/gpt-4.1" {
+		t.Fatalf("agent model = %q, want openai/gpt-4.1", agent.model)
+	}
+	if agent.calls != 1 {
+		t.Fatalf("AvailableModels calls = %d, want 1 for punctuated alias lookup", agent.calls)
+	}
+}
+
+func TestCmdModel_AliasStillResolvesOnColdStart(t *testing.T) {
+	p := &stubPlatformEngine{n: "plain"}
+	agent := &stubStrictModelAgent{models: []ModelOption{{Name: "gpt-4.1", Alias: "gpt"}}}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
+
+	e.cmdModel(p, msg, []string{"switch", "gpt"})
+
+	if agent.model != "gpt-4.1" {
+		t.Fatalf("agent model = %q, want gpt-4.1", agent.model)
+	}
+}
+
 func TestCmdModel_LegacySyntaxStillWorks(t *testing.T) {
 	p := &stubPlatformEngine{n: "plain"}
 	agent := &stubModelModeAgent{}
@@ -3177,6 +3251,44 @@ func TestCmdModel_MultiWorkspaceUsesWorkspaceAgentAndSessions(t *testing.T) {
 	}
 }
 
+func TestCmdModel_MultiWorkspaceSwitchDoesNotMutateProviderModel(t *testing.T) {
+	p := &stubPlatformEngine{n: "plain"}
+	globalAgent := &stubModelModeAgent{model: "gpt-4.1-mini"}
+	e := NewEngine("test", globalAgent, []Platform{p}, "", LangEnglish)
+
+	baseDir := t.TempDir()
+	bindingPath := filepath.Join(t.TempDir(), "bindings.json")
+	e.SetMultiWorkspace(baseDir, bindingPath)
+
+	wsDir := normalizeWorkspacePath(t.TempDir())
+	channelID := "C-model-provider"
+	e.workspaceBindings.Bind("project:test", channelID, "chan", wsDir)
+
+	ws := e.workspacePool.GetOrCreate(wsDir)
+	wsAgent := &stubModelModeAgent{
+		model: "gpt-4.1-mini",
+		providers: []ProviderConfig{{
+			Name:   "openai",
+			Model:  "gpt-4.1-mini",
+			Models: []ModelOption{{Name: "gpt-4.1", Alias: "gpt"}, {Name: "gpt-4.1-mini", Alias: "mini"}},
+		}},
+		active: "openai",
+	}
+	ws.agent = wsAgent
+	ws.sessions = NewSessionManager("")
+
+	msg := &Message{SessionKey: "feishu:" + channelID + ":u1", ReplyCtx: "ctx"}
+
+	e.cmdModel(p, msg, []string{"switch", "gpt"})
+
+	if wsAgent.model != "gpt-4.1" {
+		t.Fatalf("workspace agent model = %q, want gpt-4.1", wsAgent.model)
+	}
+	if got := wsAgent.GetActiveProvider(); got == nil || got.Model != "gpt-4.1-mini" {
+		t.Fatalf("workspace active provider = %#v, want unchanged model gpt-4.1-mini", got)
+	}
+}
+
 func TestGetOrCreateWorkspaceAgent_InheritsActiveProvider(t *testing.T) {
 	agentName := "test-workspace-provider-inherit"
 	RegisterAgent(agentName, func(opts map[string]any) (Agent, error) {
@@ -3219,6 +3331,72 @@ func TestGetOrCreateWorkspaceAgent_InheritsActiveProvider(t *testing.T) {
 	}
 	if got := wsAgent.GetActiveProvider(); got == nil || got.Name != "azure" {
 		t.Fatalf("workspace active provider = %#v, want azure", got)
+	}
+}
+
+func TestWorkspaceContext_PerChannelIndependence(t *testing.T) {
+	agentName := "test-workspace-context-dir-override"
+	RegisterAgent(agentName, func(opts map[string]any) (Agent, error) {
+		agent := &namedStubWorkDirAgent{name: agentName}
+		if workDir, ok := opts["work_dir"].(string); ok {
+			agent.workDir = workDir
+		}
+		return agent, nil
+	})
+
+	workspace := normalizeWorkspacePath(t.TempDir())
+	dirA := filepath.Join(workspace, "channelA")
+	dirB := filepath.Join(workspace, "channelB")
+	if err := os.MkdirAll(dirA, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.MkdirAll(dirB, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	store := NewProjectStateStore(filepath.Join(t.TempDir(), "projects", "test.state.json"))
+	keyA := workspace + ":feishu:oc_aaa:ou_111"
+	keyB := workspace + ":feishu:oc_bbb:ou_222"
+	store.SetWorkspaceDirOverride(keyA, dirA)
+	store.SetWorkspaceDirOverride(keyB, dirB)
+	store.Save()
+
+	e := NewEngine("test", &namedStubWorkDirAgent{name: agentName, stubWorkDirAgent: stubWorkDirAgent{workDir: workspace}}, []Platform{&stubPlatformEngine{n: "plain"}}, "", LangEnglish)
+	e.SetMultiWorkspace(workspace, filepath.Join(t.TempDir(), "bindings.json"))
+	e.SetProjectStateStore(store)
+
+	agentA, sessionsA, interactiveKeyA, effectiveDirA, err := e.workspaceContext(workspace, "feishu:oc_aaa:ou_111")
+	if err != nil {
+		t.Fatalf("workspaceContext A error: %v", err)
+	}
+	agentB, sessionsB, interactiveKeyB, effectiveDirB, err := e.workspaceContext(workspace, "feishu:oc_bbb:ou_222")
+	if err != nil {
+		t.Fatalf("workspaceContext B error: %v", err)
+	}
+
+	if interactiveKeyA != keyA {
+		t.Fatalf("interactiveKeyA = %q, want %q", interactiveKeyA, keyA)
+	}
+	if interactiveKeyB != keyB {
+		t.Fatalf("interactiveKeyB = %q, want %q", interactiveKeyB, keyB)
+	}
+	if effectiveDirA != dirA {
+		t.Fatalf("effectiveDirA = %q, want %q", effectiveDirA, dirA)
+	}
+	if effectiveDirB != dirB {
+		t.Fatalf("effectiveDirB = %q, want %q", effectiveDirB, dirB)
+	}
+	if agentA == agentB {
+		t.Fatal("workspaceContext returned same agent for different effective dirs")
+	}
+	if sessionsA == sessionsB {
+		t.Fatal("workspaceContext returned same session manager for different effective dirs")
+	}
+	if got := agentA.(interface{ GetWorkDir() string }).GetWorkDir(); got != dirA {
+		t.Fatalf("agentA workDir = %q, want %q", got, dirA)
+	}
+	if got := agentB.(interface{ GetWorkDir() string }).GetWorkDir(); got != dirB {
+		t.Fatalf("agentB workDir = %q, want %q", got, dirB)
 	}
 }
 
@@ -3339,6 +3517,74 @@ func TestCmdDir_PersistsAbsoluteOverride(t *testing.T) {
 	reloaded := NewProjectStateStore(statePath)
 	if got := reloaded.WorkDirOverride(); got != nextDir {
 		t.Fatalf("WorkDirOverride() = %q, want %q", got, nextDir)
+	}
+}
+
+func TestDirApply_MultiWorkspacePersistsWorkspaceSpecificOverride(t *testing.T) {
+	baseDir := t.TempDir()
+	workspace := normalizeWorkspacePath(t.TempDir())
+	nextDir := filepath.Join(workspace, "next")
+	if err := os.MkdirAll(nextDir, 0o755); err != nil {
+		t.Fatalf("mkdir next dir: %v", err)
+	}
+
+	statePath := filepath.Join(t.TempDir(), "projects", "test.state.json")
+	store := NewProjectStateStore(statePath)
+	agent := &stubWorkDirAgent{workDir: workspace}
+	e := NewEngine("test", agent, []Platform{&stubPlatformEngine{n: "plain"}}, "", LangEnglish)
+	e.SetMultiWorkspace(baseDir, filepath.Join(t.TempDir(), "bindings.json"))
+	e.SetProjectStateStore(store)
+
+	sessions := NewSessionManager("")
+	interactiveKey := workspace + ":feishu:oc_xxx:ou_yyy"
+
+	errMsg, successMsg := e.dirApply(agent, sessions, interactiveKey, "feishu:oc_xxx:ou_yyy", []string{"next"})
+	if errMsg != "" {
+		t.Fatalf("dirApply errMsg = %q, want empty", errMsg)
+	}
+	if !strings.Contains(successMsg, nextDir) {
+		t.Fatalf("successMsg = %q, want path %q", successMsg, nextDir)
+	}
+
+	reloaded := NewProjectStateStore(statePath)
+	if got := reloaded.WorkspaceDirOverride(interactiveKey); got != nextDir {
+		t.Fatalf("WorkspaceDirOverride(%q) = %q, want %q", interactiveKey, got, nextDir)
+	}
+	if got := reloaded.WorkDirOverride(); got != "" {
+		t.Fatalf("WorkDirOverride() = %q, want empty in multi-workspace mode", got)
+	}
+}
+
+func TestDirApply_MultiWorkspaceResetClearsWorkspaceSpecificOverride(t *testing.T) {
+	baseDir := t.TempDir()
+	workspace := normalizeWorkspacePath(t.TempDir())
+	overrideDir := filepath.Join(workspace, "override")
+	if err := os.MkdirAll(overrideDir, 0o755); err != nil {
+		t.Fatalf("mkdir override dir: %v", err)
+	}
+
+	statePath := filepath.Join(t.TempDir(), "projects", "test.state.json")
+	store := NewProjectStateStore(statePath)
+	interactiveKey := workspace + ":feishu:oc_xxx:ou_yyy"
+	store.SetWorkspaceDirOverride(interactiveKey, overrideDir)
+	store.Save()
+
+	agent := &stubWorkDirAgent{workDir: overrideDir}
+	e := NewEngine("test", agent, []Platform{&stubPlatformEngine{n: "plain"}}, "", LangEnglish)
+	e.SetBaseWorkDir(baseDir)
+	e.SetMultiWorkspace(baseDir, filepath.Join(t.TempDir(), "bindings.json"))
+	e.SetProjectStateStore(store)
+
+	sessions := NewSessionManager("")
+
+	errMsg, _ := e.dirApply(agent, sessions, interactiveKey, "feishu:oc_xxx:ou_yyy", []string{"reset"})
+	if errMsg != "" {
+		t.Fatalf("dirApply errMsg = %q, want empty", errMsg)
+	}
+
+	reloaded := NewProjectStateStore(statePath)
+	if got := reloaded.WorkspaceDirOverride(interactiveKey); got != "" {
+		t.Fatalf("WorkspaceDirOverride(%q) after reset = %q, want empty", interactiveKey, got)
 	}
 }
 
@@ -3673,6 +3919,78 @@ func TestCmdStatus_UsesLegacyTextOnPlatformWithoutCardSupport(t *testing.T) {
 	}
 }
 
+func TestCmdQuiet_TogglesDisplay(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetDisplayConfig(DisplayCfg{ThinkingMessages: true, ToolMessages: true, ThinkingMaxLen: 300, ToolMaxLen: 500})
+	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
+
+	// First /quiet: both on → both off (quiet ON)
+	e.cmdQuiet(p, msg, nil)
+	if e.display.ThinkingMessages || e.display.ToolMessages {
+		t.Fatalf("after first /quiet: ThinkingMessages=%v, ToolMessages=%v, want both false",
+			e.display.ThinkingMessages, e.display.ToolMessages)
+	}
+	if len(p.sent) != 1 || !strings.Contains(p.sent[0], "Quiet mode ON") {
+		t.Fatalf("sent = %q, want quiet ON message", p.sent)
+	}
+
+	// Second /quiet: both off → both on (quiet OFF)
+	p.sent = nil
+	e.cmdQuiet(p, msg, nil)
+	if !e.display.ThinkingMessages || !e.display.ToolMessages {
+		t.Fatalf("after second /quiet: ThinkingMessages=%v, ToolMessages=%v, want both true",
+			e.display.ThinkingMessages, e.display.ToolMessages)
+	}
+	if len(p.sent) != 1 || !strings.Contains(p.sent[0], "Quiet mode OFF") {
+		t.Fatalf("sent = %q, want quiet OFF message", p.sent)
+	}
+}
+
+func TestHandleMessage_ExtraContentPreservedThroughAlias(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	agent := &stubAgent{}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	e.aliasMu.Lock()
+	e.aliases["hi"] = "hello world"
+	e.aliasMu.Unlock()
+
+	msg := &Message{
+		SessionKey:   "test:user1",
+		ReplyCtx:     "ctx",
+		Content:      "hi",
+		ExtraContent: "> quoted reply context",
+		Platform:     "test",
+		UserID:       "user1",
+	}
+
+	e.handleMessage(p, msg)
+
+	if !strings.Contains(msg.Content, "> quoted reply context") {
+		t.Fatalf("ExtraContent lost after alias resolution: msg.Content = %q", msg.Content)
+	}
+	if !strings.Contains(msg.Content, "hello world") {
+		t.Fatalf("alias not resolved: msg.Content = %q", msg.Content)
+	}
+}
+
+func TestCmdDiff_RejectsDashTarget(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx", UserID: "admin1"}
+	e.SetAdminFrom("admin1")
+
+	e.handleCommand(p, msg, "/diff --output=/tmp/evil")
+
+	if len(p.sent) == 0 {
+		t.Fatal("expected error reply for dash target")
+	}
+	if !strings.Contains(p.sent[0], "must not start with '-'") {
+		t.Fatalf("sent = %q, want rejection of dash target", p.sent[0])
+	}
+}
+
 func TestCmdUsage_UnsupportedAgent(t *testing.T) {
 	p := &stubPlatformEngine{n: "plain"}
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
@@ -3932,7 +4250,16 @@ func TestRenderListCard_MakesEveryVisibleSessionClickable(t *testing.T) {
 	}
 
 	e := NewEngine("test", &stubListAgent{sessions: sessions}, []Platform{&stubPlatformEngine{n: "test"}}, "", LangEnglish)
-	e.sessions.GetOrCreateActive("test:user1").SetAgentSessionID(sessions[5].ID, "test")
+	// Register all agent sessions with the session manager so they pass the
+	// owned-session filter (simulates cc-connect having created each session).
+	var internalIDs []string
+	for i, s := range sessions {
+		sess := e.sessions.NewSession("test:user1", "session-"+string(rune('A'+i)))
+		sess.SetAgentSessionID(s.ID, "test")
+		internalIDs = append(internalIDs, sess.ID)
+	}
+	// Switch active to the session mapped to sessions[5] (agent-session-F).
+	e.sessions.SwitchSession("test:user1", internalIDs[5])
 
 	card, err := e.renderListCard("test:user1", 1)
 	if err != nil {
@@ -5956,6 +6283,40 @@ func TestQueueMessage_DeadSession_ReturnsFalse(t *testing.T) {
 	}
 }
 
+// TestQueueMessage_NilAgentSession_DuringStartup verifies that messages can be
+// queued when the interactiveState exists but agentSession is nil (session is
+// still starting up). This is the fix for issue #565.
+func TestQueueMessage_NilAgentSession_DuringStartup(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	e := newTestEngine()
+
+	key := "test:starting-session"
+	// Simulate the placeholder state created by ensureInteractiveStateForQueueing
+	state := &interactiveState{
+		platform: p,
+		replyCtx: "ctx",
+		// agentSession is nil — session is starting up
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	msg := &Message{SessionKey: key, Content: "queued during startup", ReplyCtx: "ctx-startup"}
+	ok := e.queueMessageForBusySession(p, msg, key)
+	if !ok {
+		t.Fatal("expected true: messages should be queueable during session startup")
+	}
+
+	state.mu.Lock()
+	if len(state.pendingMessages) != 1 {
+		t.Fatalf("pendingMessages len = %d, want 1", len(state.pendingMessages))
+	}
+	if state.pendingMessages[0].content != "queued during startup" {
+		t.Fatalf("queued content = %q, want %q", state.pendingMessages[0].content, "queued during startup")
+	}
+	state.mu.Unlock()
+}
+
 // --- 2. /compress flow ---
 
 type stubCompressorAgent struct {
@@ -6951,14 +7312,21 @@ func TestCmdShell_MultiWorkspaceIgnoresMissingSharedBinding(t *testing.T) {
 	e.cmdShell(p, msg, "/shell pwd")
 
 	deadline := time.Now().Add(2 * time.Second)
+	// Normalize both the expected and missing paths to handle macOS symlink
+	// resolution (e.g. /var/folders/ -> /private/var/folders/). Then check
+	// that the shell output contains the resolved expected path and does NOT
+	// contain the resolved missing path.
+	expectedResolved := normalizeWorkspacePath(agent.workDir)
+	missingResolved := normalizeWorkspacePath(missingDir)
 	for {
 		sent := p.getSent()
 		if len(sent) > 0 {
-			if !strings.Contains(sent[0], normalizeWorkspacePath(agent.workDir)) {
-				t.Fatalf("expected shell output to fall back to agent work dir %q, got %q", agent.workDir, sent[0])
+			output := sent[0]
+			if !strings.Contains(output, agent.workDir) && !strings.Contains(output, expectedResolved) {
+				t.Fatalf("expected shell output to fall back to agent work dir %q (resolved %q), got %q", agent.workDir, expectedResolved, output)
 			}
-			if strings.Contains(sent[0], missingDir) {
-				t.Fatalf("expected shell output to ignore missing shared workspace %q, got %q", missingDir, sent[0])
+			if strings.Contains(output, missingDir) || strings.Contains(output, missingResolved) {
+				t.Fatalf("expected shell output to ignore missing shared workspace %q, got %q", missingDir, output)
 			}
 			return
 		}
@@ -8755,4 +9123,45 @@ func TestExtractSessionKeyParts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSetObserveConfig(t *testing.T) {
+	e := NewEngine("test", &stubAgent{}, nil, "", LangEnglish)
+	e.SetObserveConfig("/tmp/test-project", "slack:C123:U456")
+	if !e.observeEnabled {
+		t.Fatal("observe should be enabled")
+	}
+	if e.observeProjectDir != "/tmp/test-project" {
+		t.Fatalf("unexpected project dir: %s", e.observeProjectDir)
+	}
+}
+
+func TestObserveStartsOnlyWithSlack(t *testing.T) {
+	stub := &stubPlatformWithObserve{stubPlatform: stubPlatform{n: "slack"}}
+	e := NewEngine("test", &stubAgent{}, []Platform{stub}, "", LangEnglish)
+	e.SetObserveConfig("/tmp/fake-project", "slack:C123:U456")
+
+	target := e.findObserverTarget()
+	if target == nil {
+		t.Fatal("expected to find observer target for Slack")
+	}
+}
+
+func TestObserveNoTargetWithoutSlack(t *testing.T) {
+	stub := &stubPlatform{n: "telegram"}
+	e := NewEngine("test", &stubAgent{}, []Platform{stub}, "", LangEnglish)
+	e.SetObserveConfig("/tmp/fake-project", "slack:C123:U456")
+
+	target := e.findObserverTarget()
+	if target != nil {
+		t.Fatal("expected no observer target without Slack")
+	}
+}
+
+type stubPlatformWithObserve struct {
+	stubPlatform
+}
+
+func (s *stubPlatformWithObserve) SendObservation(_ context.Context, _, _ string) error {
+	return nil
 }

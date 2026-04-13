@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"flag"
@@ -28,6 +29,16 @@ var (
 	commit    = "none"
 	buildTime = "unknown"
 )
+
+type initialModelRefreshStarter interface {
+	StartInitialModelRefresh()
+}
+
+type providerWiringResult struct {
+	explicitProviderRequested bool
+	activeProviderApplied     bool
+	canStartInitialRefresh    bool
+}
 
 func main() {
 	checkUpdateAsync()
@@ -71,6 +82,9 @@ func main() {
 		case "weixin":
 			runWeixin(os.Args[2:])
 			return
+		case "doctor":
+			runDoctor(os.Args[2:])
+			return
 		}
 	}
 
@@ -96,6 +110,9 @@ func main() {
 
 	configFlag := flag.String("config", "", "path to config file (default: ./config.toml or ~/.cc-connect/config.toml)")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	observeFlag := flag.Bool("observe", false, "observe native terminal Claude Code sessions and forward to Slack")
+	observeChannel := flag.String("observe-channel", "", "Slack channel ID to forward terminal observations to (requires --observe)")
+	forceFlag := flag.Bool("force", false, "kill any existing instance with the same config before starting")
 	flag.Usage = printUsage
 	flag.Parse()
 
@@ -108,6 +125,22 @@ func main() {
 	core.CurrentVersion = version
 
 	configPath := resolveConfigPath(*configFlag)
+
+	// Handle --force: kill any existing instance before we try to acquire the lock
+	if *forceFlag {
+		if KillExistingInstance(configPath) {
+			slog.Info("killed existing instance via --force")
+		}
+	}
+
+	// Acquire instance lock to prevent duplicate processes
+	instanceLock, err := AcquireInstanceLock(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Use --force to kill the existing instance.\n")
+		os.Exit(1)
+	}
+	slog.Info("acquired instance lock", "path", instanceLock.Path())
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		if err := bootstrapConfig(configPath); err != nil {
@@ -130,35 +163,38 @@ func main() {
 
 	setupLogger(cfg.Log.Level, logWriter)
 
+	// run_as_user preflight + isolation audit. MUST run before any engine
+	// or agent is constructed. If any project fails, abort startup
+	// entirely — never half-spawn. See core/runas_check.go and
+	// core/runas_audit.go for the checks themselves.
+	if err := runRunAsUserStartupChecks(context.Background(), cfg); err != nil {
+		slog.Error("run_as_user: startup checks failed, refusing to start", "error", err)
+		os.Exit(1)
+	}
+
 	engines := make([]*core.Engine, 0, len(cfg.Projects))
 	effectiveWorkDirs := make([]string, 0, len(cfg.Projects))
 
 	for _, proj := range cfg.Projects {
-		agent, err := core.CreateAgent(proj.Agent.Type, proj.Agent.Options)
+		// Inject project-level run_as_user / run_as_env into the agent's
+		// opts map so agents that support isolation can pick them up
+		// without needing their own top-level config plumbing.
+		if proj.RunAsUser != "" {
+			if proj.Agent.Options == nil {
+				proj.Agent.Options = map[string]any{}
+			}
+			proj.Agent.Options["run_as_user"] = proj.RunAsUser
+			if len(proj.RunAsEnv) > 0 {
+				proj.Agent.Options["run_as_env"] = proj.RunAsEnv
+			}
+		}
+		agent, err := core.CreateAgent(proj.Agent.Type, buildAgentOptions(cfg.DataDir, proj))
 		if err != nil {
 			slog.Error("failed to create agent", "project", proj.Name, "error", err)
 			os.Exit(1)
 		}
 
-		// Wire providers if the agent supports it
-		if ps, ok := agent.(core.ProviderSwitcher); ok && len(proj.Agent.Providers) > 0 {
-			providers := make([]core.ProviderConfig, len(proj.Agent.Providers))
-			for i, p := range proj.Agent.Providers {
-				providers[i] = core.ProviderConfig{
-					Name:     p.Name,
-					APIKey:   p.APIKey,
-					BaseURL:  p.BaseURL,
-					Model:    p.Model,
-					Models:   convertProviderModels(p.Models),
-					Thinking: p.Thinking,
-					Env:      p.Env,
-				}
-			}
-			ps.SetProviders(providers)
-			if active, _ := proj.Agent.Options["provider"].(string); active != "" {
-				ps.SetActiveProvider(active)
-			}
-		}
+		providerWiring := wireAgentProviders(agent, proj.Agent)
 
 		var platforms []core.Platform
 		for _, pc := range proj.Platforms {
@@ -179,6 +215,7 @@ func main() {
 		workDir, _ := proj.Agent.Options["work_dir"].(string)
 		projectState := core.NewProjectStateStore(projectStatePath(cfg.DataDir, proj.Name))
 		effectiveWorkDir := applyProjectStateOverride(proj.Name, agent, workDir, projectState)
+		startInitialRefreshIfReady(agent, providerWiring)
 		sessionFile := sessionStorePath(cfg.DataDir, proj.Name, effectiveWorkDir)
 
 		// Parse language setting
@@ -224,6 +261,42 @@ func main() {
 			slog.Info("multi-workspace mode enabled", "project", proj.Name, "base_dir", baseDir)
 		}
 
+		// Wire terminal observation (--observe / [projects.observe])
+		observeEnabled := *observeFlag
+		obsChan := *observeChannel
+		if proj.Observe != nil {
+			if !observeEnabled && proj.Observe.Enabled {
+				observeEnabled = true
+			}
+			if obsChan == "" && proj.Observe.Channel != "" {
+				obsChan = proj.Observe.Channel
+			}
+		}
+		if observeEnabled {
+			if obsChan == "" {
+				slog.Error("observe: channel is required (use --observe-channel or set channel in [projects.observe])")
+				os.Exit(1)
+			}
+			hasSlack := false
+			for _, p := range platforms {
+				if p.Name() == "slack" {
+					hasSlack = true
+					break
+				}
+			}
+			if !hasSlack {
+				slog.Warn("observe requires a Slack platform; ignoring")
+			} else {
+				projectDir := resolveClaudeProjectDir(workDir)
+				if projectDir == "" {
+					slog.Warn("observe: could not find Claude Code project directory", "workDir", workDir)
+				} else {
+					sessionKey := fmt.Sprintf("slack:%s", obsChan)
+					engine.SetObserveConfig(projectDir, sessionKey)
+				}
+			}
+		}
+
 		// Wire global custom commands
 		for _, c := range cfg.Commands {
 			engine.AddCommand(c.Name, c.Description, c.Prompt, c.Exec, c.WorkDir, "config")
@@ -267,6 +340,15 @@ func main() {
 		}
 
 		engine.SetDisplayConfig(buildDisplayCfg(cfg, &proj))
+
+		// Wire local reference normalization / rendering
+		engine.SetReferenceConfig(core.ReferenceRenderCfg{
+			NormalizeAgents: proj.References.NormalizeAgents,
+			RenderPlatforms: proj.References.RenderPlatforms,
+			DisplayPath:     proj.References.DisplayPath,
+			MarkerStyle:     proj.References.MarkerStyle,
+			EnclosureStyle:  proj.References.EnclosureStyle,
+		})
 
 		// Wire local reference normalization / rendering
 		engine.SetReferenceConfig(core.ReferenceRenderCfg{
@@ -902,6 +984,7 @@ func main() {
 	if logCloser != nil {
 		logCloser.Close()
 	}
+	instanceLock.Release()
 
 	if restartReq != nil {
 		if err := core.SaveRestartNotify(cfg.DataDir, *restartReq); err != nil {
@@ -1012,6 +1095,23 @@ func applyProjectStateOverride(projectName string, agent core.Agent, configuredW
 	return override
 }
 
+// resolveClaudeProjectDir returns the Claude Code project directory for a given
+// work directory, or "" if it doesn't exist.
+func resolveClaudeProjectDir(workDir string) string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	// Claude Code encodes paths by replacing os.PathSeparator with "-"
+	// e.g. /home/leigh/workspace/cc-connect -> -home-leigh-workspace-cc-connect
+	encoded := strings.ReplaceAll(workDir, string(os.PathSeparator), "-")
+	dir := filepath.Join(homeDir, ".claude", "projects", encoded)
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return ""
+	}
+	return dir
+}
+
 // resolveConfigPath determines which config file to use.
 // Priority: explicit flag → ./config.toml → ~/.cc-connect/config.toml
 func resolveConfigPath(explicit string) string {
@@ -1094,6 +1194,7 @@ Usage:
 
 Flags:
   --config <path>    Path to config file (default: ./config.toml or ~/.cc-connect/config.toml)
+  --force            Kill any existing instance with the same config before starting
   --version          Print version and exit
   --help             Show this help message
 
@@ -1361,6 +1462,55 @@ func convertProviderModels(ms []config.ProviderModelConfig) []core.ModelOption {
 		opts[i] = core.ModelOption{Name: m.Model, Alias: m.Alias}
 	}
 	return opts
+}
+
+func buildAgentOptions(dataDir string, proj config.ProjectConfig) map[string]any {
+	opts := make(map[string]any, len(proj.Agent.Options)+2)
+	for k, v := range proj.Agent.Options {
+		opts[k] = v
+	}
+	opts["cc_data_dir"] = dataDir
+	opts["cc_project"] = proj.Name
+	return opts
+}
+
+func wireAgentProviders(agent core.Agent, agentCfg config.AgentConfig) providerWiringResult {
+	result := providerWiringResult{canStartInitialRefresh: true}
+	active, _ := agentCfg.Options["provider"].(string)
+	result.explicitProviderRequested = active != ""
+
+	ps, ok := agent.(core.ProviderSwitcher)
+	if !ok || len(agentCfg.Providers) == 0 {
+		return result
+	}
+
+	providers := make([]core.ProviderConfig, len(agentCfg.Providers))
+	for i, p := range agentCfg.Providers {
+		providers[i] = core.ProviderConfig{
+			Name:     p.Name,
+			APIKey:   p.APIKey,
+			BaseURL:  p.BaseURL,
+			Model:    p.Model,
+			Models:   convertProviderModels(p.Models),
+			Thinking: p.Thinking,
+			Env:      p.Env,
+		}
+	}
+	ps.SetProviders(providers)
+	if result.explicitProviderRequested {
+		result.activeProviderApplied = ps.SetActiveProvider(active)
+		result.canStartInitialRefresh = result.activeProviderApplied
+	}
+	return result
+}
+
+func startInitialRefreshIfReady(agent core.Agent, result providerWiringResult) {
+	if !result.canStartInitialRefresh {
+		return
+	}
+	if starter, ok := agent.(initialModelRefreshStarter); ok {
+		starter.StartInitialModelRefresh()
+	}
 }
 
 func convertCoreModels(ms []core.ModelOption) []config.ProviderModelConfig {

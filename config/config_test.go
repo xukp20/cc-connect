@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -184,6 +185,85 @@ func TestConfigValidate(t *testing.T) {
 				return
 			}
 			assertErrContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestRunAsEnv_RejectsDangerousVars(t *testing.T) {
+	dangerous := []string{"PATH", "path", "LD_PRELOAD", "HOME", "USER", "SHELL", "SUDO_USER", "SUDO_COMMAND", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES"}
+	for _, v := range dangerous {
+		err := validateRunAsEnv("projects[0]", []string{v})
+		if err == nil {
+			t.Errorf("validateRunAsEnv(%q) = nil, want error", v)
+		}
+	}
+
+	safe := []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CUSTOM_VAR"}
+	for _, v := range safe {
+		err := validateRunAsEnv("projects[0]", []string{v})
+		if err != nil {
+			t.Errorf("validateRunAsEnv(%q) = %v, want nil", v, err)
+		}
+	}
+}
+
+func TestEffectiveDisplayQuiet(t *testing.T) {
+	tru, fal := true, false
+	tests := []struct {
+		name     string
+		cfg      Config
+		proj     ProjectConfig
+		wantTM   bool
+		wantTool bool
+	}{
+		{
+			name:     "defaults no quiet",
+			cfg:      Config{},
+			proj:     ProjectConfig{},
+			wantTM:   true,
+			wantTool: true,
+		},
+		{
+			name:     "global quiet maps when display unset",
+			cfg:      Config{Quiet: &tru},
+			proj:     ProjectConfig{},
+			wantTM:   false,
+			wantTool: false,
+		},
+		{
+			name:     "project quiet maps when display unset",
+			cfg:      Config{},
+			proj:     ProjectConfig{Quiet: &tru},
+			wantTM:   false,
+			wantTool: false,
+		},
+		{
+			name: "explicit thinking_messages wins over quiet",
+			cfg: Config{
+				Quiet:   &tru,
+				Display: DisplayConfig{ThinkingMessages: &tru},
+			},
+			proj:     ProjectConfig{},
+			wantTM:   true,
+			wantTool: false,
+		},
+		{
+			name:     "project quiet false overrides global quiet",
+			cfg:      Config{Quiet: &tru},
+			proj:     ProjectConfig{Quiet: &fal},
+			wantTM:   true,
+			wantTool: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tm, tool, _, _ := EffectiveDisplay(&tt.cfg, &tt.proj)
+			if tm != tt.wantTM {
+				t.Fatalf("ThinkingMessages = %v, want %v", tm, tt.wantTM)
+			}
+			if tool != tt.wantTool {
+				t.Fatalf("ToolMessages = %v, want %v", tool, tt.wantTool)
+			}
 		})
 	}
 }
@@ -809,6 +889,87 @@ func TestLoad_RejectsNegativeResetOnIdleMins(t *testing.T) {
 	}
 }
 
+func TestLoad_ParsesRunAsUser(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("run_as_user is only supported on Linux/macOS")
+	}
+	configPath := writeConfigFixture(t, projectWithRunAsUserFixture)
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got := cfg.Projects[0].RunAsUser; got != "partseeker-coder" {
+		t.Fatalf("run_as_user = %q, want %q", got, "partseeker-coder")
+	}
+	if got := cfg.Projects[0].RunAsEnv; len(got) != 2 || got[0] != "PGSSLROOTCERT" || got[1] != "PGSSLMODE" {
+		t.Fatalf("run_as_env = %v, want [PGSSLROOTCERT PGSSLMODE]", got)
+	}
+}
+
+func TestLoad_RejectsRunAsUserRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("run_as_user is only supported on Linux/macOS")
+	}
+	configPath := writeConfigFixture(t, projectWithRunAsUserRootFixture)
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("expected error for run_as_user = root")
+	}
+	if !strings.Contains(err.Error(), "must not be root") {
+		t.Fatalf("error = %q, want 'must not be root' validation", err.Error())
+	}
+}
+
+func TestLoad_RejectsRunAsUserInvalidChars(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("run_as_user is only supported on Linux/macOS")
+	}
+	configPath := writeConfigFixture(t, projectWithRunAsUserInvalidFixture)
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("expected error for invalid run_as_user")
+	}
+	if !strings.Contains(err.Error(), "invalid characters") {
+		t.Fatalf("error = %q, want 'invalid characters' validation", err.Error())
+	}
+}
+
+func TestValidateRunAsUser_ValidNames(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("run_as_user is only supported on Linux/macOS")
+	}
+	valid := []string{"leigh", "partseeker-coder", "user_name", "user.name", "u1", "_internal"}
+	for _, name := range valid {
+		if err := validateRunAsUser("projects[0]", name); err != nil {
+			t.Errorf("validateRunAsUser(%q) = %v, want nil", name, err)
+		}
+	}
+}
+
+func TestValidateRunAsUser_InvalidNames(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("run_as_user is only supported on Linux/macOS")
+	}
+	invalid := []string{
+		"-leading-dash",
+		"1leading-digit",
+		"has space",
+		"has/slash",
+		"has;semi",
+		"has$dollar",
+		"has`tick",
+		strings.Repeat("a", 33), // too long
+	}
+	for _, name := range invalid {
+		if err := validateRunAsUser("projects[0]", name); err == nil {
+			t.Errorf("validateRunAsUser(%q) = nil, want error", name)
+		}
+	}
+}
+
 func TestLoad_ParsesAttachmentSendOff(t *testing.T) {
 	configPath := writeConfigFixture(t, attachmentSendConfigFixture)
 
@@ -1070,6 +1231,64 @@ type = "telegram"
 
 [projects.platforms.options]
 bot_token = "token_xxx"
+`
+
+const projectWithRunAsUserFixture = `
+[[projects]]
+name = "sandboxed"
+run_as_user = "partseeker-coder"
+run_as_env = ["PGSSLROOTCERT", "PGSSLMODE"]
+
+[projects.agent]
+type = "claudecode"
+
+[projects.agent.options]
+work_dir = "/tmp/sandboxed"
+
+[[projects.platforms]]
+type = "slack"
+
+[projects.platforms.options]
+app_token = "xapp-token"
+bot_token = "xoxb-token"
+`
+
+const projectWithRunAsUserRootFixture = `
+[[projects]]
+name = "bad"
+run_as_user = "root"
+
+[projects.agent]
+type = "claudecode"
+
+[projects.agent.options]
+work_dir = "/tmp/bad"
+
+[[projects.platforms]]
+type = "slack"
+
+[projects.platforms.options]
+app_token = "xapp-token"
+bot_token = "xoxb-token"
+`
+
+const projectWithRunAsUserInvalidFixture = `
+[[projects]]
+name = "bad"
+run_as_user = "has space"
+
+[projects.agent]
+type = "claudecode"
+
+[projects.agent.options]
+work_dir = "/tmp/bad"
+
+[[projects.platforms]]
+type = "slack"
+
+[projects.platforms.options]
+app_token = "xapp-token"
+bot_token = "xoxb-token"
 `
 
 const weixinConfigFixture = `

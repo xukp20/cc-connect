@@ -28,7 +28,7 @@ type codexSession struct {
 	model     string
 	effort    string
 	mode      string
-	baseURL   string   // provider base URL; passed as -c openai_base_url=<url>
+	baseURL   string // provider base URL; passed as -c openai_base_url=<url>
 	extraEnv  []string
 	events    chan core.Event
 	threadID  atomic.Value // stores string — Codex thread_id
@@ -502,6 +502,23 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 	case "function_call_output":
 		slog.Debug("codexSession: function_call_output")
 
+	case "web_search":
+		status, _ := item["status"].(string)
+		success := codexToolSuccess(status, nil)
+		evt := core.Event{
+			Type:        core.EventToolResult,
+			ToolName:    "WebSearch",
+			ToolInput:   codexWebSearchInput(item),
+			ToolResult:  truncate(codexWebSearchResultBody(item), 500),
+			ToolStatus:  strings.TrimSpace(status),
+			ToolSuccess: &success,
+		}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
+
 	case "error":
 		msg, _ := item["message"].(string)
 		if msg != "" && !strings.Contains(msg, "Falling back") {
@@ -526,6 +543,9 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 // codexExtractToolInput extracts a human-readable input from a Codex tool item.
 // For web_search, it reads action.queries[] or falls back to the top-level query.
 func codexExtractToolInput(item map[string]any) string {
+	if itemType, _ := item["type"].(string); itemType == "web_search" {
+		return codexWebSearchInput(item)
+	}
 	if action, ok := item["action"].(map[string]any); ok {
 		if queries, ok := action["queries"].([]any); ok && len(queries) > 0 {
 			var parts []string
@@ -549,6 +569,106 @@ func codexExtractToolInput(item map[string]any) string {
 		return n
 	}
 	return ""
+}
+
+func codexWebSearchInput(item map[string]any) string {
+	if q, _ := item["query"].(string); strings.TrimSpace(q) != "" {
+		return strings.TrimSpace(q)
+	}
+	action, _ := item["action"].(map[string]any)
+	if action == nil {
+		return ""
+	}
+	if q, _ := action["query"].(string); strings.TrimSpace(q) != "" {
+		return strings.TrimSpace(q)
+	}
+	queries := codexWebSearchQueries(action)
+	if len(queries) == 0 {
+		return ""
+	}
+	return strings.Join(queries, "\n")
+}
+
+func codexWebSearchResultBody(item map[string]any) string {
+	action, _ := item["action"].(map[string]any)
+	if action == nil {
+		query := codexWebSearchInput(item)
+		if query == "" {
+			return ""
+		}
+		return "search>\n" + query
+	}
+
+	query := codexWebSearchInput(item)
+	actionType, _ := action["type"].(string)
+	actionType = strings.TrimSpace(actionType)
+
+	var sections []string
+	appendSection := func(header string, lines ...string) {
+		header = strings.TrimSpace(header)
+		if header == "" {
+			return
+		}
+		trimmed := make([]string, 0, len(lines))
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				trimmed = append(trimmed, line)
+			}
+		}
+		if len(trimmed) == 0 {
+			return
+		}
+		sections = append(sections, header+">\n"+strings.Join(trimmed, "\n"))
+	}
+
+	switch strings.ToLower(actionType) {
+	case "search":
+		queries := codexWebSearchQueries(action)
+		if len(queries) == 0 && query != "" {
+			queries = []string{query}
+		}
+		appendSection("search", queries...)
+	case "openpage", "open_page":
+		if query != "" {
+			appendSection("query", query)
+		}
+		if url, _ := action["url"].(string); strings.TrimSpace(url) != "" {
+			appendSection("open_page", url)
+		}
+	case "findinpage", "find_in_page":
+		if query != "" {
+			appendSection("query", query)
+		}
+		var lines []string
+		if url, _ := action["url"].(string); strings.TrimSpace(url) != "" {
+			lines = append(lines, "url: "+strings.TrimSpace(url))
+		}
+		if pattern, _ := action["pattern"].(string); strings.TrimSpace(pattern) != "" {
+			lines = append(lines, "pattern: "+strings.TrimSpace(pattern))
+		}
+		appendSection("find_in_page", lines...)
+	default:
+		appendSection("action", actionType)
+		if query != "" {
+			appendSection("query", query)
+		}
+	}
+
+	return strings.Join(sections, "\n\n")
+}
+
+func codexWebSearchQueries(action map[string]any) []string {
+	raw, _ := action["queries"].([]any)
+	queries := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		s, _ := entry.(string)
+		s = strings.TrimSpace(s)
+		if s != "" {
+			queries = append(queries, s)
+		}
+	}
+	return queries
 }
 
 func codexToolSuccess(status string, exitCode *int) bool {

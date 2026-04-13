@@ -80,6 +80,87 @@ func TestBuildExecArgs_IncludesBaseURL(t *testing.T) {
 	}
 }
 
+func TestCodexWebSearchInput_FallsBackToActionFields(t *testing.T) {
+	item := map[string]any{
+		"type":  "web_search",
+		"query": "",
+		"action": map[string]any{
+			"type":    "search",
+			"query":   "OpenAI Codex app server documentation",
+			"queries": []any{"OpenAI Codex app server documentation", "Codex app server initialize"},
+		},
+	}
+
+	got := codexWebSearchInput(item)
+	want := "OpenAI Codex app server documentation"
+	if got != want {
+		t.Fatalf("codexWebSearchInput() = %q, want %q", got, want)
+	}
+}
+
+func TestCodexWebSearchResultBody_FindInPage(t *testing.T) {
+	item := map[string]any{
+		"type":  "web_search",
+		"query": "OpenAI Codex app server documentation",
+		"action": map[string]any{
+			"type":    "find_in_page",
+			"url":     "https://developers.openai.com/codex/app-server",
+			"pattern": "initialize",
+		},
+	}
+
+	got := codexWebSearchResultBody(item)
+	want := "query>\nOpenAI Codex app server documentation\n\nfind_in_page>\nurl: https://developers.openai.com/codex/app-server\npattern: initialize"
+	if got != want {
+		t.Fatalf("codexWebSearchResultBody() = %q, want %q", got, want)
+	}
+}
+
+func TestCodexSession_HandleItemCompleted_WebSearchEmitsToolResult(t *testing.T) {
+	cs := &codexSession{
+		events: make(chan core.Event, 4),
+		ctx:    context.Background(),
+	}
+	raw := map[string]any{
+		"item": map[string]any{
+			"type":   "web_search",
+			"status": "completed",
+			"query":  "",
+			"action": map[string]any{
+				"type":    "search",
+				"query":   "OpenAI Codex app server documentation",
+				"queries": []any{"OpenAI Codex app server documentation"},
+			},
+		},
+	}
+
+	cs.handleItemCompleted(raw)
+
+	select {
+	case evt := <-cs.events:
+		if evt.Type != core.EventToolResult {
+			t.Fatalf("event type = %q, want %q", evt.Type, core.EventToolResult)
+		}
+		if evt.ToolName != "WebSearch" {
+			t.Fatalf("tool name = %q, want WebSearch", evt.ToolName)
+		}
+		if evt.ToolInput != "OpenAI Codex app server documentation" {
+			t.Fatalf("tool input = %q, want query backfill", evt.ToolInput)
+		}
+		if evt.ToolResult != "search>\nOpenAI Codex app server documentation" {
+			t.Fatalf("tool result = %q, want formatted search body", evt.ToolResult)
+		}
+		if evt.ToolStatus != "completed" {
+			t.Fatalf("tool status = %q, want completed", evt.ToolStatus)
+		}
+		if evt.ToolSuccess == nil || !*evt.ToolSuccess {
+			t.Fatalf("tool success = %#v, want true", evt.ToolSuccess)
+		}
+	default:
+		t.Fatal("expected tool result event")
+	}
+}
+
 func TestBuildExecArgs_ResumeOmitsCdFlag(t *testing.T) {
 	cs, err := newCodexSession(context.Background(), "/tmp/project", "", "", "full-auto", "thread-abc", "", nil)
 	if err != nil {

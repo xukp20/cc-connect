@@ -606,8 +606,11 @@ func (s *appServerSession) handleItemStarted(item map[string]any) {
 		s.emit(core.Event{Type: core.EventToolUse, ToolName: "MCP", ToolInput: name + "\n" + appServerJSON(item["arguments"])})
 
 	case "webSearch":
-		query, _ := item["query"].(string)
-		s.emit(core.Event{Type: core.EventToolUse, ToolName: "WebSearch", ToolInput: query})
+		s.emit(core.Event{
+			Type:      core.EventToolUse,
+			ToolName:  "WebSearch",
+			ToolInput: appServerWebSearchInput(item),
+		})
 
 	case "dynamicToolCall":
 		tool, _ := item["tool"].(string)
@@ -676,11 +679,14 @@ func (s *appServerSession) handleItemCompleted(item map[string]any) {
 		})
 
 	case "webSearch":
-		query, _ := item["query"].(string)
+		success := true
 		s.emit(core.Event{
-			Type:       core.EventToolResult,
-			ToolName:   "WebSearch",
-			ToolResult: truncate(strings.TrimSpace(query), 500),
+			Type:        core.EventToolResult,
+			ToolName:    "WebSearch",
+			ToolInput:   appServerWebSearchInput(item),
+			ToolResult:  truncate(appServerWebSearchResultBody(item), 500),
+			ToolStatus:  "completed",
+			ToolSuccess: &success,
 		})
 
 	case "dynamicToolCall":
@@ -738,6 +744,106 @@ func appServerDynamicToolText(raw any) string {
 		return appServerJSON(raw)
 	}
 	return strings.Join(parts, "\n")
+}
+
+func appServerWebSearchInput(item map[string]any) string {
+	if q, _ := item["query"].(string); strings.TrimSpace(q) != "" {
+		return strings.TrimSpace(q)
+	}
+	action, _ := item["action"].(map[string]any)
+	if action == nil {
+		return ""
+	}
+	if q, _ := action["query"].(string); strings.TrimSpace(q) != "" {
+		return strings.TrimSpace(q)
+	}
+	queries := appServerWebSearchQueries(action)
+	if len(queries) == 0 {
+		return ""
+	}
+	return strings.Join(queries, "\n")
+}
+
+func appServerWebSearchResultBody(item map[string]any) string {
+	action, _ := item["action"].(map[string]any)
+	if action == nil {
+		query := appServerWebSearchInput(item)
+		if query == "" {
+			return ""
+		}
+		return "search>\n" + query
+	}
+
+	query := appServerWebSearchInput(item)
+	actionType, _ := action["type"].(string)
+	actionType = strings.TrimSpace(actionType)
+
+	var sections []string
+	appendSection := func(header string, lines ...string) {
+		header = strings.TrimSpace(header)
+		if header == "" {
+			return
+		}
+		trimmed := make([]string, 0, len(lines))
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				trimmed = append(trimmed, line)
+			}
+		}
+		if len(trimmed) == 0 {
+			return
+		}
+		sections = append(sections, header+">\n"+strings.Join(trimmed, "\n"))
+	}
+
+	switch strings.ToLower(actionType) {
+	case "search":
+		queries := appServerWebSearchQueries(action)
+		if len(queries) == 0 && query != "" {
+			queries = []string{query}
+		}
+		appendSection("search", queries...)
+	case "openpage", "open_page":
+		if query != "" {
+			appendSection("query", query)
+		}
+		if url, _ := action["url"].(string); strings.TrimSpace(url) != "" {
+			appendSection("open_page", url)
+		}
+	case "findinpage", "find_in_page":
+		if query != "" {
+			appendSection("query", query)
+		}
+		var lines []string
+		if url, _ := action["url"].(string); strings.TrimSpace(url) != "" {
+			lines = append(lines, "url: "+strings.TrimSpace(url))
+		}
+		if pattern, _ := action["pattern"].(string); strings.TrimSpace(pattern) != "" {
+			lines = append(lines, "pattern: "+strings.TrimSpace(pattern))
+		}
+		appendSection("find_in_page", lines...)
+	default:
+		appendSection("action", actionType)
+		if query != "" {
+			appendSection("query", query)
+		}
+	}
+
+	return strings.Join(sections, "\n\n")
+}
+
+func appServerWebSearchQueries(action map[string]any) []string {
+	raw, _ := action["queries"].([]any)
+	queries := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		s, _ := entry.(string)
+		s = strings.TrimSpace(s)
+		if s != "" {
+			queries = append(queries, s)
+		}
+	}
+	return queries
 }
 
 func appServerToolSuccess(status string, exitCode *int) bool {

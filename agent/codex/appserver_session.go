@@ -600,10 +600,7 @@ func (s *appServerSession) handleItemStarted(item map[string]any) {
 		s.emit(core.Event{Type: core.EventToolUse, ToolName: "Bash", ToolInput: command})
 
 	case "mcpToolCall":
-		server, _ := item["server"].(string)
-		tool, _ := item["tool"].(string)
-		name := strings.Trim(strings.Join([]string{server, tool}, ":"), ":")
-		s.emit(core.Event{Type: core.EventToolUse, ToolName: "MCP", ToolInput: name + "\n" + appServerJSON(item["arguments"])})
+		s.emit(core.Event{Type: core.EventToolUse, ToolName: "MCP", ToolInput: codexMCPToolInput(item)})
 
 	case "webSearch":
 		s.emit(core.Event{
@@ -621,6 +618,27 @@ func (s *appServerSession) handleItemStarted(item map[string]any) {
 			Type:      core.EventToolUse,
 			ToolName:  "Patch",
 			ToolInput: codexPatchChangesSummary(item["changes"]),
+		})
+
+	case "collabAgentToolCall":
+		s.emit(core.Event{
+			Type:      core.EventToolUse,
+			ToolName:  "CollabAgent",
+			ToolInput: appServerCollabToolInput(item),
+		})
+
+	case "imageGeneration":
+		s.emit(core.Event{
+			Type:      core.EventToolUse,
+			ToolName:  "ImageGeneration",
+			ToolInput: appServerImageGenerationInput(item),
+		})
+
+	case "imageView":
+		s.emit(core.Event{
+			Type:      core.EventToolUse,
+			ToolName:  "ImageView",
+			ToolInput: appServerImageViewInput(item),
 		})
 	}
 }
@@ -667,17 +685,13 @@ func (s *appServerSession) handleItemCompleted(item map[string]any) {
 		})
 
 	case "mcpToolCall":
-		tool, _ := item["tool"].(string)
 		status, _ := item["status"].(string)
-		result := appServerJSON(item["result"])
-		if errText := appServerJSON(item["error"]); strings.TrimSpace(errText) != "" && result == "" {
-			result = errText
-		}
 		success := appServerToolSuccess(status, nil)
 		s.emit(core.Event{
 			Type:        core.EventToolResult,
-			ToolName:    tool,
-			ToolResult:  truncate(strings.TrimSpace(result), 500),
+			ToolName:    "MCP",
+			ToolInput:   codexMCPToolInput(item),
+			ToolResult:  truncate(codexMCPToolResultBody(item), 500),
 			ToolStatus:  strings.TrimSpace(status),
 			ToolSuccess: &success,
 		})
@@ -715,6 +729,41 @@ func (s *appServerSession) handleItemCompleted(item map[string]any) {
 			ToolInput:   codexPatchChangesSummary(item["changes"]),
 			ToolResult:  truncate(codexPatchResultBody(item), 500),
 			ToolStatus:  strings.TrimSpace(status),
+			ToolSuccess: &success,
+		})
+
+	case "collabAgentToolCall":
+		status, _ := item["status"].(string)
+		success := appServerToolSuccess(status, nil)
+		s.emit(core.Event{
+			Type:        core.EventToolResult,
+			ToolName:    "CollabAgent",
+			ToolInput:   appServerCollabToolInput(item),
+			ToolResult:  truncate(appServerCollabToolResultBody(item), 500),
+			ToolStatus:  strings.TrimSpace(status),
+			ToolSuccess: &success,
+		})
+
+	case "imageGeneration":
+		status, _ := item["status"].(string)
+		success := appServerToolSuccess(status, nil)
+		s.emit(core.Event{
+			Type:        core.EventToolResult,
+			ToolName:    "ImageGeneration",
+			ToolInput:   appServerImageGenerationInput(item),
+			ToolResult:  truncate(appServerImageGenerationResultBody(item), 500),
+			ToolStatus:  strings.TrimSpace(status),
+			ToolSuccess: &success,
+		})
+
+	case "imageView":
+		success := true
+		s.emit(core.Event{
+			Type:        core.EventToolResult,
+			ToolName:    "ImageView",
+			ToolInput:   appServerImageViewInput(item),
+			ToolResult:  "",
+			ToolStatus:  "completed",
 			ToolSuccess: &success,
 		})
 	}

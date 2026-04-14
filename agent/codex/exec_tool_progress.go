@@ -73,7 +73,11 @@ func codexMCPResultText(raw any) string {
 	}
 
 	appendSection("result", codexContentText(result["content"]))
-	appendSection("structured_content", appServerJSON(result["structured_content"]))
+	structured := appServerJSON(result["structured_content"])
+	if structured == "" {
+		structured = appServerJSON(result["structuredContent"])
+	}
+	appendSection("structured_content", structured)
 	if len(sections) > 0 {
 		return strings.Join(sections, "\n\n")
 	}

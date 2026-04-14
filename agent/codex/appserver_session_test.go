@@ -175,3 +175,155 @@ func TestAppServerSession_HandleItemCompleted_FileChangeEmitsToolResult(t *testi
 		t.Fatal("expected tool result event")
 	}
 }
+
+func TestAppServerSession_HandleItemCompleted_MCPToolCallEmitsStructuredResult(t *testing.T) {
+	s := &appServerSession{
+		events: make(chan core.Event, 4),
+	}
+	item := map[string]any{
+		"type":   "mcpToolCall",
+		"status": "completed",
+		"server": "lean_steward",
+		"tool":   "lint_check",
+		"arguments": map[string]any{
+			"active_node_path": "Demo.Node",
+		},
+		"result": map[string]any{
+			"content": []any{
+				map[string]any{"type": "text", "text": "{\"success\":true}"},
+			},
+			"structuredContent": map[string]any{"success": true},
+		},
+	}
+
+	s.handleItemCompleted(item)
+
+	select {
+	case evt := <-s.events:
+		if evt.Type != core.EventToolResult {
+			t.Fatalf("event type = %q, want %q", evt.Type, core.EventToolResult)
+		}
+		if evt.ToolName != "MCP" {
+			t.Fatalf("tool name = %q, want MCP", evt.ToolName)
+		}
+		if evt.ToolInput == "" || evt.ToolInput[:7] != "server>" {
+			t.Fatalf("tool input = %q, want MCP input sections", evt.ToolInput)
+		}
+		want := "result>\n{\"success\":true}\n\nstructured_content>\n{\"success\":true}"
+		if evt.ToolResult != want {
+			t.Fatalf("tool result = %q, want %q", evt.ToolResult, want)
+		}
+		if evt.ToolSuccess == nil || !*evt.ToolSuccess {
+			t.Fatalf("tool success = %#v, want true", evt.ToolSuccess)
+		}
+	default:
+		t.Fatal("expected tool result event")
+	}
+}
+
+func TestAppServerSession_HandleItemCompleted_CollabAgentToolCallEmitsResult(t *testing.T) {
+	s := &appServerSession{
+		events: make(chan core.Event, 4),
+	}
+	item := map[string]any{
+		"type":              "collabAgentToolCall",
+		"status":            "completed",
+		"tool":              "spawnAgent",
+		"prompt":            "Investigate the parser",
+		"model":             "gpt-5.4-mini",
+		"receiverThreadIds": []any{"thread-2"},
+		"agentsStates": map[string]any{
+			"thread-2": map[string]any{
+				"status":  "running",
+				"message": "agent booted",
+			},
+		},
+	}
+
+	s.handleItemCompleted(item)
+
+	select {
+	case evt := <-s.events:
+		if evt.Type != core.EventToolResult {
+			t.Fatalf("event type = %q, want %q", evt.Type, core.EventToolResult)
+		}
+		if evt.ToolName != "CollabAgent" {
+			t.Fatalf("tool name = %q, want CollabAgent", evt.ToolName)
+		}
+		if evt.ToolInput == "" || evt.ToolInput[:5] != "tool>" {
+			t.Fatalf("tool input = %q, want collab input sections", evt.ToolInput)
+		}
+		if evt.ToolResult != "agents>\nthread-2: running (agent booted)" {
+			t.Fatalf("tool result = %q, want agent state summary", evt.ToolResult)
+		}
+		if evt.ToolSuccess == nil || !*evt.ToolSuccess {
+			t.Fatalf("tool success = %#v, want true", evt.ToolSuccess)
+		}
+	default:
+		t.Fatal("expected tool result event")
+	}
+}
+
+func TestAppServerSession_HandleItemCompleted_ImageGenerationEmitsResult(t *testing.T) {
+	s := &appServerSession{
+		events: make(chan core.Event, 4),
+	}
+	item := map[string]any{
+		"type":          "imageGeneration",
+		"status":        "completed",
+		"revisedPrompt": "draw a sunrise",
+		"result":        "https://example.com/generated.png",
+		"savedPath":     "/tmp/generated.png",
+	}
+
+	s.handleItemCompleted(item)
+
+	select {
+	case evt := <-s.events:
+		if evt.Type != core.EventToolResult {
+			t.Fatalf("event type = %q, want %q", evt.Type, core.EventToolResult)
+		}
+		if evt.ToolName != "ImageGeneration" {
+			t.Fatalf("tool name = %q, want ImageGeneration", evt.ToolName)
+		}
+		if evt.ToolInput != "draw a sunrise" {
+			t.Fatalf("tool input = %q, want revised prompt", evt.ToolInput)
+		}
+		want := "result>\nhttps://example.com/generated.png\n\nsaved_path>\n/tmp/generated.png"
+		if evt.ToolResult != want {
+			t.Fatalf("tool result = %q, want %q", evt.ToolResult, want)
+		}
+	default:
+		t.Fatal("expected tool result event")
+	}
+}
+
+func TestAppServerSession_HandleItemCompleted_ImageViewEmitsResult(t *testing.T) {
+	s := &appServerSession{
+		events: make(chan core.Event, 4),
+	}
+	item := map[string]any{
+		"type": "imageView",
+		"path": "/tmp/example.png",
+	}
+
+	s.handleItemCompleted(item)
+
+	select {
+	case evt := <-s.events:
+		if evt.Type != core.EventToolResult {
+			t.Fatalf("event type = %q, want %q", evt.Type, core.EventToolResult)
+		}
+		if evt.ToolName != "ImageView" {
+			t.Fatalf("tool name = %q, want ImageView", evt.ToolName)
+		}
+		if evt.ToolInput != "path>\n/tmp/example.png" {
+			t.Fatalf("tool input = %q, want image path section", evt.ToolInput)
+		}
+		if evt.ToolSuccess == nil || !*evt.ToolSuccess {
+			t.Fatalf("tool success = %#v, want true", evt.ToolSuccess)
+		}
+	default:
+		t.Fatal("expected tool result event")
+	}
+}

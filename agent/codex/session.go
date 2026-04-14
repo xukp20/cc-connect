@@ -381,6 +381,7 @@ var codexToolNames = map[string]string{
 	"file_search":      "FileSearch",
 	"code_interpreter": "CodeInterpreter",
 	"computer_use":     "ComputerUse",
+	"mcp_tool_call":    "MCP",
 	"mcp_tool":         "MCP",
 }
 
@@ -428,6 +429,19 @@ func (cs *codexSession) handleItemStarted(raw map[string]any) {
 		case cs.events <- evt:
 		case <-cs.ctx.Done():
 			return
+		}
+	default:
+		if toolName := codexExecToolName(itemType); toolName != "" && itemType != "web_search" {
+			input := codexExecToolInput(item)
+			if strings.TrimSpace(input) == "" {
+				return
+			}
+			evt := core.Event{Type: core.EventToolUse, ToolName: toolName, ToolInput: input}
+			select {
+			case cs.events <- evt:
+			case <-cs.ctx.Done():
+				return
+			}
 		}
 	}
 	// Other tool types (web_search etc.) have empty fields at start;
@@ -547,6 +561,40 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 			return
 		}
 
+	case "mcp_tool_call", "mcp_tool":
+		status, _ := item["status"].(string)
+		success := codexToolSuccess(status, nil)
+		evt := core.Event{
+			Type:        core.EventToolResult,
+			ToolName:    "MCP",
+			ToolInput:   codexMCPToolInput(item),
+			ToolResult:  truncate(codexMCPToolResultBody(item), 500),
+			ToolStatus:  strings.TrimSpace(status),
+			ToolSuccess: &success,
+		}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
+
+	case "file_search", "code_interpreter", "computer_use":
+		status, _ := item["status"].(string)
+		success := codexToolSuccess(status, nil)
+		evt := core.Event{
+			Type:        core.EventToolResult,
+			ToolName:    codexExecToolName(itemType),
+			ToolInput:   codexExecToolInput(item),
+			ToolResult:  truncate(codexGenericToolResultBody(item), 500),
+			ToolStatus:  strings.TrimSpace(status),
+			ToolSuccess: &success,
+		}
+		select {
+		case cs.events <- evt:
+		case <-cs.ctx.Done():
+			return
+		}
+
 	case "error":
 		msg, _ := item["message"].(string)
 		if msg != "" && !strings.Contains(msg, "Falling back") {
@@ -554,17 +602,7 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 		}
 
 	default:
-		if toolName, known := codexToolNames[itemType]; known {
-			input := codexExtractToolInput(item)
-			evt := core.Event{Type: core.EventToolUse, ToolName: toolName, ToolInput: input}
-			select {
-			case cs.events <- evt:
-			case <-cs.ctx.Done():
-				return
-			}
-		} else {
-			slog.Debug("codexSession: unhandled item type", "item_type", itemType)
-		}
+		slog.Debug("codexSession: unhandled item type", "item_type", itemType)
 	}
 }
 
@@ -573,6 +611,12 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 func codexExtractToolInput(item map[string]any) string {
 	if itemType, _ := item["type"].(string); itemType == "web_search" {
 		return codexWebSearchInput(item)
+	}
+	if args, _ := item["arguments"].(string); strings.TrimSpace(args) != "" {
+		return strings.TrimSpace(args)
+	}
+	if argsText := appServerJSON(item["arguments"]); argsText != "" {
+		return argsText
 	}
 	if action, ok := item["action"].(map[string]any); ok {
 		if queries, ok := action["queries"].([]any); ok && len(queries) > 0 {
@@ -592,6 +636,9 @@ func codexExtractToolInput(item map[string]any) string {
 	}
 	if q, _ := item["query"].(string); q != "" {
 		return q
+	}
+	if in, _ := item["input"].(string); in != "" {
+		return in
 	}
 	if n, _ := item["name"].(string); n != "" {
 		return n

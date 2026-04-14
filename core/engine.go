@@ -2333,6 +2333,10 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 // skipped if the map entry has been replaced by a different state — this prevents
 // a stale goroutine (still running after /new created a fresh Session object and
 // a new turn started on it) from accidentally destroying the replacement state.
+//
+// IMPORTANT: The state is deleted from the map AFTER the agent session is closed
+// to avoid race conditions where concurrent requests see an empty map while the
+// agent session is still being shut down (which can take up to 130s for Stop hooks).
 func (e *Engine) cleanupInteractiveState(sessionKey string, expected ...*interactiveState) {
 	e.interactiveMu.Lock()
 	state, ok := e.interactiveStates[sessionKey]
@@ -2341,7 +2345,11 @@ func (e *Engine) cleanupInteractiveState(sessionKey string, expected ...*interac
 		e.interactiveMu.Unlock()
 		return
 	}
-	delete(e.interactiveStates, sessionKey)
+	// Capture the agent session before any further processing
+	var agentSession AgentSession
+	if ok && state != nil {
+		agentSession = state.agentSession
+	}
 	e.interactiveMu.Unlock()
 
 	// Notify senders of any queued messages that will never be processed.
@@ -2350,9 +2358,25 @@ func (e *Engine) cleanupInteractiveState(sessionKey string, expected ...*interac
 		e.notifyDroppedQueuedMessages(state, fmt.Errorf("session reset"))
 	}
 
-	if ok && state != nil && state.agentSession != nil {
-		e.closeAgentSessionWithTimeout(sessionKey, state.agentSession)
+	// Close the agent session BEFORE deleting from the map.
+	// This prevents race conditions where /stop during cleanup sees
+	// an empty map and reports "No execution in progress" while
+	// the agent session Close() is still blocking (up to 130s).
+	if agentSession != nil {
+		e.closeAgentSessionWithTimeout(sessionKey, agentSession)
 	}
+
+	// Now delete the state from the map after the session is closed.
+	e.interactiveMu.Lock()
+	// Re-check that the state hasn't been replaced during the close
+	currentState, currentOk := e.interactiveStates[sessionKey]
+	if currentOk && len(expected) > 0 && expected[0] != nil && currentState != expected[0] {
+		// Another turn has replaced the state during our close — don't delete it.
+		e.interactiveMu.Unlock()
+		return
+	}
+	delete(e.interactiveStates, sessionKey)
+	e.interactiveMu.Unlock()
 }
 
 func (e *Engine) closeAgentSessionAsync(sessionKey string, agentSession AgentSession) {
@@ -2748,8 +2772,14 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 		case EventResult:
 			cp.Finalize(ProgressCardStateCompleted)
-			if event.SessionID != "" {
-				session.SetAgentSessionID(event.SessionID, e.agent.Name())
+			// Use state.agentSession.CurrentSessionID() instead of event.SessionID.
+			// event.SessionID may be empty in some cases, causing the agent_session_id
+			// to not be persisted to disk, breaking session resume on next startup.
+			if state != nil && state.agentSession != nil {
+				if currentID := state.agentSession.CurrentSessionID(); currentID != "" {
+					session.SetAgentSessionID(currentID, e.agent.Name())
+					sessions.Save()
+				}
 			}
 
 			fullResponse := event.Content
@@ -9921,8 +9951,9 @@ func (e *Engine) HandleRelay(ctx context.Context, fromProject, chatID, message s
 				textParts = append(textParts, fmt.Sprintf(e.i18n.T(MsgToolResult), tn, out)+"\n\n")
 			}
 		case EventResult:
-			if event.SessionID != "" {
-				session.SetAgentSessionID(event.SessionID, e.agent.Name())
+			// Use agentSession.CurrentSessionID() for the same reason as above.
+			if currentID := agentSession.CurrentSessionID(); currentID != "" {
+				session.SetAgentSessionID(currentID, e.agent.Name())
 				e.sessions.Save()
 			}
 			resp := event.Content

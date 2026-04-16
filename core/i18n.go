@@ -432,10 +432,12 @@ const (
 	MsgAliasNotFound   MsgKey = "alias_not_found"
 	MsgAliasUsage      MsgKey = "alias_usage"
 
-	MsgNewSessionCreated      MsgKey = "new_session_created"
-	MsgNewSessionCreatedName  MsgKey = "new_session_created_name"
-	MsgSessionAutoResetIdle   MsgKey = "session_auto_reset_idle"
+	MsgNewSessionCreated     MsgKey = "new_session_created"
+	MsgNewSessionCreatedName MsgKey = "new_session_created_name"
+	MsgSessionAutoResetIdle  MsgKey = "session_auto_reset_idle"
 	MsgSessionClosingGraceful MsgKey = "session_closing_graceful"
+	MsgClearUsage            MsgKey = "clear_usage"
+	MsgClearDone             MsgKey = "clear_done"
 
 	MsgDeleteUsage              MsgKey = "delete_usage"
 	MsgDeleteSuccess            MsgKey = "delete_success"
@@ -517,6 +519,7 @@ const (
 	MsgBuiltinCmdQuiet     MsgKey = "quiet"
 	MsgBuiltinCmdCompress  MsgKey = "compress"
 	MsgBuiltinCmdInterrupt MsgKey = "interrupt"
+	MsgBuiltinCmdClear     MsgKey = "clear"
 	MsgBuiltinCmdStop      MsgKey = "stop"
 	MsgBuiltinCmdCron      MsgKey = "cron"
 	MsgBuiltinCmdCommands  MsgKey = "commands"
@@ -938,6 +941,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/lang [en|zh|zh-TW|ja|es|auto]\n  View/switch language\n\n" +
 			"/compress\n  Compress conversation context\n\n" +
 			"/interrupt\n  Interrupt current execution without closing the session\n\n" +
+			"/clear [reset]\n  Clear current session context in place\n\n" +
 			"/tts [always|voice_only]\n  View/switch text-to-speech mode\n\n" +
 			"/shell <command>\n  Run a shell command and return the output\n\n" +
 			"/show <ref>\n  View a file, directory, or code snippet by reference\n\n" +
@@ -984,6 +988,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/lang [en|zh|zh-TW|ja|es|auto]\n  查看/切换语言\n\n" +
 			"/compress\n  压缩会话上下文\n\n" +
 			"/interrupt\n  中断当前执行但保留会话\n\n" +
+			"/clear [reset]\n  原地清空当前会话上下文\n\n" +
 			"/tts [always|voice_only]\n  查看/切换语音合成模式\n\n" +
 			"/shell <命令>\n  执行 Shell 命令并返回结果\n\n" +
 			"/show <引用>\n  按引用查看文件、目录或代码片段\n\n" +
@@ -1030,6 +1035,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/lang [en|zh|zh-TW|ja|es|auto]\n  查看/切換語言\n\n" +
 			"/compress\n  壓縮會話上下文\n\n" +
 			"/interrupt\n  中斷當前執行但保留會話\n\n" +
+			"/clear [reset]\n  原地清空當前會話上下文\n\n" +
 			"/tts [always|voice_only]\n  查看/切換語音合成模式\n\n" +
 			"/shell <命令>\n  執行 Shell 命令並返回結果\n\n" +
 			"/dir [路徑|reset]\n  查看、切換或重置 Agent 工作目錄\n\n" +
@@ -1074,6 +1080,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/lang [en|zh|zh-TW|ja|es|auto]\n  言語の表示/切り替え\n\n" +
 			"/compress\n  会話コンテキストを圧縮\n\n" +
 			"/interrupt\n  セッションを閉じずに現在の実行を中断\n\n" +
+			"/clear [reset]\n  現在のセッションのコンテキストをその場でクリア\n\n" +
 			"/tts [always|voice_only]\n  音声合成モードの表示/切り替え\n\n" +
 			"/shell <コマンド>\n  シェルコマンドを実行して結果を返す\n\n" +
 			"/dir [パス|reset]\n  エージェントの作業ディレクトリを表示/切り替え/リセット\n\n" +
@@ -1118,6 +1125,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/lang [en|zh|zh-TW|ja|es|auto]\n  Ver/cambiar idioma\n\n" +
 			"/compress\n  Comprimir contexto de conversación\n\n" +
 			"/interrupt\n  Interrumpir la ejecución actual sin cerrar la sesión\n\n" +
+			"/clear [reset]\n  Limpiar el contexto de la sesión actual sin crear otra sesión\n\n" +
 			"/tts [always|voice_only]\n  Ver/cambiar modo de síntesis de voz\n\n" +
 			"/shell <comando>\n  Ejecutar un comando shell y devolver la salida\n\n" +
 			"/dir [ruta|reset]\n  Ver, cambiar o restablecer el directorio de trabajo del agente\n\n" +
@@ -1251,6 +1259,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/skills — List agent skills\n" +
 			"/compress — Compress context\n" +
 			"/interrupt — Interrupt current execution\n" +
+			"/clear [reset] — Clear current session context\n" +
 			"/stop — Stop current execution",
 		LangChinese: "**工具与自动化**\n" +
 			"/shell <命令> — 执行 Shell 命令\n" +
@@ -1262,6 +1271,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/skills — 列出 Agent Skills\n" +
 			"/compress — 压缩上下文\n" +
 			"/interrupt — 中断当前执行\n" +
+			"/clear [reset] — 清空当前会话上下文\n" +
 			"/stop — 停止当前执行",
 		LangTraditionalChinese: "**工具與自動化**\n" +
 			"/shell <命令> — 執行 Shell 命令\n" +
@@ -1272,6 +1282,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/skills — 列出 Agent Skills\n" +
 			"/compress — 壓縮上下文\n" +
 			"/interrupt — 中斷當前執行\n" +
+			"/clear [reset] — 清空當前會話上下文\n" +
 			"/stop — 停止當前執行",
 		LangJapanese: "**ツール・自動化**\n" +
 			"/shell <コマンド> — シェルコマンド実行\n" +
@@ -1282,6 +1293,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/skills — エージェントスキル一覧\n" +
 			"/compress — コンテキスト圧縮\n" +
 			"/interrupt — 現在の実行を中断\n" +
+			"/clear [reset] — 現在のセッションのコンテキストをクリア\n" +
 			"/stop — 現在の実行を停止",
 		LangSpanish: "**Herramientas y automatización**\n" +
 			"/shell <comando> — Ejecutar comando shell\n" +
@@ -1292,6 +1304,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/skills — Listar skills del agente\n" +
 			"/compress — Comprimir contexto\n" +
 			"/interrupt — Interrumpir la ejecución actual\n" +
+			"/clear [reset] — Limpiar el contexto de la sesión actual\n" +
 			"/stop — Detener ejecución actual",
 	},
 	MsgHelpSystemSection: {
@@ -3077,6 +3090,20 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese:           "⏳ 前のセッションを終了中です（通常は数秒、最大2分）。新しいセッションは自動的に開始されます。",
 		LangSpanish:            "⏳ Cerrando la sesión anterior (normalmente unos segundos, hasta 2 minutos). La nueva sesión se iniciará automáticamente.",
 	},
+	MsgClearUsage: {
+		LangEnglish:            "Usage: `/clear`\n       `/clear reset`",
+		LangChinese:            "用法：`/clear`\n      `/clear reset`",
+		LangTraditionalChinese: "用法：`/clear`\n      `/clear reset`",
+		LangJapanese:           "使い方：`/clear`\n       `/clear reset`",
+		LangSpanish:            "Uso: `/clear`\n      `/clear reset`",
+	},
+	MsgClearDone: {
+		LangEnglish:            "✅ Current session context cleared. The next message will start a fresh agent session.",
+		LangChinese:            "✅ 当前会话上下文已清空。下一条消息将启动一个新的 Agent 会话。",
+		LangTraditionalChinese: "✅ 當前會話上下文已清空。下一則訊息將啟動新的 Agent 會話。",
+		LangJapanese:           "✅ 現在のセッションのコンテキストをクリアしました。次のメッセージで新しいエージェントセッションを開始します。",
+		LangSpanish:            "✅ El contexto de la sesión actual se limpió. El próximo mensaje iniciará una nueva sesión del agente.",
+	},
 	MsgDeleteUsage: {
 		LangEnglish:            "Usage: `/delete <number>` or `/delete 1,2,3` or `/delete 3-7` or `/delete 1,3-5,8`.\nUse `/list` to see session numbers.",
 		LangChinese:            "用法：`/delete <序号>`，或 `/delete 1,2,3`，或 `/delete 3-7`，或 `/delete 1,3-5,8`。\n使用 `/list` 查看会话序号。",
@@ -3564,6 +3591,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "中斷當前執行但保留會話",
 		LangJapanese:           "セッションを閉じずに現在の実行を中断",
 		LangSpanish:            "Interrumpir la ejecución actual sin cerrar la sesión",
+	},
+	MsgBuiltinCmdClear: {
+		LangEnglish:            "Clear current session context in place, arg: [reset]",
+		LangChinese:            "原地清空当前会话上下文，参数: [reset]",
+		LangTraditionalChinese: "原地清空當前會話上下文，參數: [reset]",
+		LangJapanese:           "現在のセッションのコンテキストをその場でクリア、引数: [reset]",
+		LangSpanish:            "Limpiar el contexto de la sesión actual sin crear otra sesión, arg: [reset]",
 	},
 	MsgBuiltinCmdStop: {
 		LangEnglish:            "Stop current execution",

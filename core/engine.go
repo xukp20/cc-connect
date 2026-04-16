@@ -3319,6 +3319,7 @@ var builtinCommands = []struct {
 	{[]string{"heartbeat", "hb"}, "heartbeat"},
 	{[]string{"compress", "compact"}, "compress"},
 	{[]string{"interrupt"}, "interrupt"},
+	{[]string{"clear"}, "clear"},
 	{[]string{"stop"}, "stop"},
 	{[]string{"help"}, "help"},
 	{[]string{"version"}, "version"},
@@ -3499,6 +3500,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdCompress(p, msg)
 	case "interrupt":
 		e.cmdInterrupt(p, msg)
+	case "clear":
+		e.cmdClear(p, msg, args)
 	case "stop":
 		e.cmdStop(p, msg)
 	case "help":
@@ -3865,6 +3868,15 @@ func filterOwnedSessions(sessions []AgentSessionInfo, known map[string]struct{})
 		}
 	}
 	return filtered
+}
+
+func (e *Engine) resetCurrentSessionState(msg *Message, sessions *SessionManager, interactiveKey string) *Session {
+	e.cleanupInteractiveState(interactiveKey)
+	session := sessions.GetOrCreateActive(msg.SessionKey)
+	session.SetAgentSessionID("", "")
+	session.ClearHistory()
+	sessions.Save()
+	return session
 }
 
 const listPageSize = 20
@@ -6364,6 +6376,25 @@ func (e *Engine) cmdInterrupt(p Platform, msg *Message) {
 	}
 
 	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgInterruptDone))
+}
+
+func (e *Engine) cmdClear(p Platform, msg *Message, args []string) {
+	mode := "reset"
+	if len(args) > 0 {
+		mode = matchSubCommand(strings.ToLower(args[0]), []string{"reset"})
+	}
+	if mode != "reset" {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgClearUsage))
+		return
+	}
+
+	_, sessions, interactiveKey, err := e.commandContext(p, msg)
+	if err != nil {
+		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
+		return
+	}
+	e.resetCurrentSessionState(msg, sessions, interactiveKey)
+	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgClearDone))
 }
 
 func (e *Engine) stopInteractiveSession(sessionKey string, quietPlatform Platform, quietReplyCtx any) bool {

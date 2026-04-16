@@ -2307,7 +2307,6 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 		// continues outputting while new agent starts (issue #327).
 		e.closeAgentSessionWithTimeout(sessionKey, state.agentSession)
 		delete(e.interactiveStates, sessionKey)
-		ok = false // prevent reading stale settings below
 	}
 
 	// Select the agent to use for this session

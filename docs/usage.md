@@ -44,12 +44,15 @@ Each user gets an independent session with full conversation context. Manage ses
 | `/reasoning [level]` | View or switch reasoning effort (Codex) |
 | `/mode [name]` | View or switch permission mode |
 | `/mcp` | List MCP servers for the current agent/backend |
-| `/stop` | Stop current execution |
+| `/interrupt` | Interrupt current execution without closing the session when the current agent/backend supports native interrupt |
+| `/stop` | Stop current execution and end the current interactive run/session |
 | `/help` | Show available commands |
 
 During a session, the agent may request tool permissions. Reply **allow** / **deny** / **allow all**.
 
 For Codex, `/mcp` currently has two modes: `app_server` shows **Runtime MCP Servers**, while `exec` shows **Configured MCP Servers** parsed from local config. Other agents/backends may still report `/mcp` as unsupported.
+
+`/interrupt` is a lighter command than `/stop`: it tries to interrupt only the current in-flight turn and keep the session usable. `/stop` keeps its stronger existing behavior and is still the fallback when native interrupt is unavailable or cannot be confirmed.
 
 You can also configure automatic session rotation after inactivity:
 

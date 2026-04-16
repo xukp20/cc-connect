@@ -46,12 +46,15 @@ cc-connect 完整功能使用指南。
 | `/reasoning [等级]` | 查看或切换推理强度（Codex）|
 | `/mode [名称]` | 查看或切换权限模式 |
 | `/mcp` | 列出当前 Agent / backend 可见的 MCP servers |
-| `/stop` | 停止当前执行 |
+| `/interrupt` | 在当前 Agent / backend 支持原生 interrupt 时，中断当前执行但保留会话 |
+| `/stop` | 停止当前执行并结束当前交互运行 / 会话 |
 | `/help` | 显示可用命令 |
 
 会话中 Agent 请求工具权限时，回复 **允许** / **拒绝** / **允许所有**。
 
 对 Codex 而言，`/mcp` 当前分为两种语义：`app_server` 显示 **运行时 MCP Servers**，`exec` 显示从本地配置解析出的 **已配置 MCP Servers**。其他 Agent / backend 目前仍可能返回不支持。
+
+`/interrupt` 比 `/stop` 更轻量：它只尝试打断当前 in-flight turn，并尽量保留当前 session 继续使用；`/stop` 保持原有较强的停止语义，在当前后端不支持 native interrupt 或无法确认中断完成时，仍然是兜底命令。
 
 也可以为项目开启“空闲后自动切换新会话”：
 
